@@ -1,6 +1,19 @@
-# AE MCP
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.svg">
+  <img alt="AEffectMCP — MCP · JSX · CEP · aerender" src="assets/banner-light.svg" width="1200">
+</picture>
 
-[English](README.md)
+<p>
+  <a href="LICENSE"><img alt="MIT 许可证" src="assets/badge-license.svg"></a>
+  <img alt="Node.js 22+" src="assets/badge-node.svg">
+  <img alt="8 个 MCP 工具" src="assets/badge-tools.svg">
+  <img alt="版本 1.1" src="assets/badge-version.svg">
+</p>
+
+[English](README.md) · [中文说明](README.zh-CN.md)
+
+**AEffectMCP** 通过程序化接口连接真实 After Effects 宿主，返回结构化结果与渲染证据。
 
 通过 MCP、JSX、CEP 桥接和 aerender 调试、测试与控制 Adobe After Effects，无需 computer use。仓库包含本地 stdio MCP 服务，也可作为 Codex 技能使用。
 
@@ -17,14 +30,16 @@
 需要 Node.js 22+ 和已安装的 After Effects。MCP 服务没有 npm 运行依赖。
 
 ```sh
-git clone https://github.com/Misaoys/ae-mcp.git
-cd ae-mcp
+git clone https://github.com/Misaoys/AEffectMCP.git
+cd AEffectMCP
 node scripts/ae-mcp.mjs --call ae_discover
 ```
 
 完整 MCP 配置见 [英文说明中的 Codex 配置](README.md#connect-to-codex)。替换仓库和 AE 的示例路径，保留 Windows 系统变量转发，然后重新连接 MCP 客户端。
 
 如需 Codex 技能，将仓库克隆到 skills 目录，文件夹命名为 `ae-mcp`，再使用 `$ae-mcp`。技能安装与 MCP 服务注册是两件事。
+
+项目名称为 AEffectMCP；保留 `ae-mcp` 技能/配置键、脚本文件名和原有 `ae_*` 工具，兼容已经安装的调用方式。
 
 ## 真实宿主与隔离测试
 

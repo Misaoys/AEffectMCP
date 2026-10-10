@@ -1,4 +1,4 @@
-# Bundled AE MCP transport and operations
+# AEffectMCP transport and operations
 
 ## Installation and connection
 
@@ -11,7 +11,7 @@ Example Codex TOML (substitute the actual absolute executable and installed skil
 ```toml
 [mcp_servers.ae-mcp]
 command = 'node'
-args = ['C:/tools/ae-mcp/scripts/ae-mcp.mjs', '--stdio']
+args = ['C:/tools/AEffectMCP/scripts/ae-mcp.mjs', '--stdio']
 startup_timeout_sec = 10
 tool_timeout_sec = 60
 enabled = true
@@ -67,7 +67,7 @@ Write the JSON below as `<task>/work/ae-mcp/inspect-args.json`, replacing paths 
 Then invoke the installed skill without embedding arguments into shell code:
 
 ```powershell
-& node 'C:/tools/ae-mcp/scripts/ae-mcp.mjs' --call ae_inspect_host --args-file 'E:\project\work\ae-mcp\inspect-args.json'
+& node 'C:/tools/AEffectMCP/scripts/ae-mcp.mjs' --call ae_inspect_host --args-file 'E:\project\work\ae-mcp\inspect-args.json'
 ```
 
 For an authorized edit, use `ae_execute_jsx` with a function body and optional undo group. Read-only layer/property inspection is a useful first step:

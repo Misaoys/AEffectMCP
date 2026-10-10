@@ -1,5 +1,5 @@
 interface:
-  display_name: "AE MCP"
+  display_name: "AEffectMCP"
   short_description: "Control, debug and test AE without computer use"
   default_prompt: "Use $ae-mcp to control, debug and test Adobe After Effects through MCP, JSX, CEP bridges and aerender, with fresh host evidence."
 policy:

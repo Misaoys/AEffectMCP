@@ -3,7 +3,9 @@ name: ae-mcp
 description: "Control, debug and test Adobe After Effects through MCP, ExtendScript/JSX, CEP script bridges and aerender without computer use. Covers projects, compositions, layers, keyframes, expressions, CEP/ScriptUI and AEX/PiPL plugins with separate source, installed, loader and live-host evidence."
 ---
 
-# AE MCP
+# AEffectMCP
+
+The display name is AEffectMCP. Keep the `ae-mcp` invocation name and existing tool identifiers for compatibility.
 
 Use programmatic AE interfaces for the requested work. This skill includes an actual local stdio MCP server, not merely a prompt or a claim that AE tools are already connected. The bundled implementation requires Node 22+ with native WebSocket and fetch. Windows supports AfterFX CLI and diagnostics; CEP CDP works wherever the host exposes a compatible debug endpoint. aerender requires its installed executable.
 

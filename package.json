@@ -1,5 +1,5 @@
 {
-  "name": "ae-mcp",
+  "name": "aeffect-mcp",
   "version": "1.1.0",
   "private": true,
   "description": "Control, debug and test Adobe After Effects through MCP, JSX, CEP and aerender without computer use.",
@@ -13,6 +13,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Misaoys/ae-mcp.git"
+    "url": "https://github.com/Misaoys/AEffectMCP.git"
   }
 }

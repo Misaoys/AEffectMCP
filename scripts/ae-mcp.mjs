@@ -305,7 +305,7 @@ async function stdioServer() {
       if (request.method === 'initialize') {
         initialized = true;
         const requested = request.params?.protocolVersion;
-        result = { protocolVersion: SUPPORTED.includes(requested) ? requested : SUPPORTED[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'ae-mcp', version: '1.1.0' },
+        result = { protocolVersion: SUPPORTED.includes(requested) ? requested : SUPPORTED[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'AEffectMCP', version: '1.1.0' },
           instructions: 'Control Adobe After Effects through JSX, CEP CDP and aerender without computer use. Discover exact executables and CEP target first. Preserve user projects and sessions. Timeout does not cancel a mutation; never blindly retry it. Use work/<task>/ for evidence. Report source, installed, loader, live-host and pixel/render proof separately. Execute destructive actions only within user authorization.' };
       } else if (request.method === 'ping') result = {};
       else if (!initialized) { reply({ id: request.id, error: { code: -32002, message: 'Initialize first' } }); continue; }

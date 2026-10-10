@@ -1,10 +1,26 @@
-# AE MCP
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/banner-light.svg">
+  <img alt="AEffectMCP — Connect your agent to your craft. MCP · JSX · CEP · aerender." src="assets/banner-light.svg" width="1200">
+</picture>
 
-[中文说明](README.zh-CN.md)
+<p>
+  <a href="LICENSE"><img alt="MIT license" src="assets/badge-license.svg"></a>
+  <img alt="Node.js 22+" src="assets/badge-node.svg">
+  <img alt="8 MCP tools" src="assets/badge-tools.svg">
+  <img alt="Version 1.1" src="assets/badge-version.svg">
+</p>
+
+[English](README.md) · [中文说明](README.zh-CN.md)
+
+**AEffectMCP** connects programmatic tools to the real After Effects host, with structured results and render evidence.
 
 Control, debug and test Adobe After Effects through MCP, JSX, CEP bridges and aerender, without computer use. Includes a local stdio MCP server and an optional Codex skill.
 
 The server has **zero npm dependencies**. Node.js 22 or newer is required. After Effects must already be installed.
+
+**Real host access** — JSX execution and CEP scripting bridges.<br>
+**Clear evidence** — Diagnostics, assertions and independent render jobs.
 
 ## Tools
 
@@ -22,8 +38,8 @@ The server has **zero npm dependencies**. Node.js 22 or newer is required. After
 ## Quick start
 
 ```sh
-git clone https://github.com/Misaoys/ae-mcp.git
-cd ae-mcp
+git clone https://github.com/Misaoys/AEffectMCP.git
+cd AEffectMCP
 node scripts/ae-mcp.mjs --call ae_discover
 ```
 
@@ -42,7 +58,7 @@ Add the following to your MCP configuration. Replace the repository and executab
 ```toml
 [mcp_servers.ae-mcp]
 command = 'node'
-args = ['C:/tools/ae-mcp/scripts/ae-mcp.mjs', '--stdio']
+args = ['C:/tools/AEffectMCP/scripts/ae-mcp.mjs', '--stdio']
 startup_timeout_sec = 10
 tool_timeout_sec = 60
 enabled = true
@@ -60,6 +76,8 @@ The Windows environment forwarding above was verified with the official MCP SDK.
 ### Optional Codex skill
 
 Clone this repository into your Codex skills directory under the name `ae-mcp`, or copy the repository's `SKILL.md`, `agents/`, `references/` and `scripts/` into that directory. Then use `$ae-mcp`. Keep the MCP command pointed at the actual installed script location.
+
+The project is named AEffectMCP. The `ae-mcp` skill/config key, script filename and existing `ae_*` tools remain compatible with previous installations.
 
 ## Run an isolated AE probe
 
