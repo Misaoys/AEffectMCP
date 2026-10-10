@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --check scripts/ae-mcp.mjs
+      - run: npm test
+      - name: Collector regression (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $taskTemp = Join-Path $PWD 'work/collector'
+          New-Item -ItemType Directory -Force -Path $taskTemp | Out-Null
+          $env:TEMP = $taskTemp
+          $env:TMP = $taskTemp
+          & ./scripts/test-collect-adobe-debug-state.ps1

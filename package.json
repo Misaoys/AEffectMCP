@@ -1,0 +1,18 @@
+{
+  "name": "ae-mcp",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Control, debug and test Adobe After Effects through MCP, JSX, CEP and aerender without computer use.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node scripts/ae-mcp.mjs --stdio",
+    "test": "node --test scripts/test-ae-mcp.mjs",
+    "test:collector": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-collect-adobe-debug-state.ps1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Misaoys/ae-mcp.git"
+  }
+}

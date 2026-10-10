@@ -1,0 +1,14 @@
+work/
+node_modules/
+*.log
+*.tmp
+.env
+.env.*
+*.aep
+*.aepx
+*.aex
+*.tif
+*.tiff
+*.zip
+.DS_Store
+Thumbs.db
