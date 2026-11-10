@@ -16,6 +16,13 @@ if (Test-Path -LiteralPath $root) {
       if ($markerItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Marker is a reparse point' }
       $info = Get-Content -LiteralPath $marker -Raw -Encoding UTF8 | ConvertFrom-Json
       if ($info.schemaVersion -ne 1 -or $info.sessionId -cne $session.Name) { throw 'Invalid session marker' }
+      $collab = Join-Path $session.FullName '.ae-mcp-collab.json'
+      $collabLock = Join-Path $session.FullName '.ae-mcp-collab-lock'
+      if (Test-Path -LiteralPath $collabLock) { throw 'Collaboration operation is locked or unknown' }
+      if (Test-Path -LiteralPath $collab) {
+        $collabInfo = Get-Content -LiteralPath $collab -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($collabInfo.schemaVersion -ne 1 -or $collabInfo.sessionId -cne $session.Name -or $collabInfo.state -cne 'closed') { throw 'Collaboration session is active or invalid' }
+      }
       $contents = @(Get-ChildItem -LiteralPath $session.FullName -Force -Recurse)
       if (@($contents | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count -gt 0) { throw 'Contains a reparse point' }
       foreach ($run in @($contents | Where-Object { $_.PSIsContainer -and $_.Name -match '^ae-mcp-' })) {

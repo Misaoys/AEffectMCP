@@ -32,6 +32,12 @@ An existing server with a different API should be used according to its own sche
 | `ae_cep_targets` | Explicit `port` from 1024 to 65534. Reads `http://127.0.0.1:<port>/json/list`; does not open a panel. |
 | `ae_inspect_host` | Transport fields below; optional `maxItems` 1–500 and `includeEffects`. Read-only project inventory; no fixture creation. |
 | `ae_execute_jsx` | Transport fields and exactly one of `code` or absolute `scriptPath`; optional `undoGroup` and `verifyCode`. The latter is an ES3 function body that checks actual host state and must return exactly `true`; otherwise the invocation fails. Without it, `verificationStatus` is `not_requested` and feature behavior remains unverified. `code` is a function body with a `return` value; files are evaluated with `$.evalFile`. Return plain JSON-compatible values without cycles or native AE object handles. |
+| `ae_collab_create` | Create a disposable shared AEP in a managed session using an isolated AE helper. Returns a `sessionId` and `projectPath`. Windows AE CLI only. |
+| `ae_collab_claim` / `ae_collab_release` | Exclusively claim a comp name for an `agentId`, and release it for handoff. Stable comp IDs are retained across handoffs. |
+| `ae_collab_run` | Under a cross-process project lock, open the shared AEP in an isolated helper, find or create the claimed `comp`, execute `code`, require `verifyCode` to return `true`, then save. New comps default to 512×512, five seconds and 30 fps; width, height, duration and frameRate are adjustable. Both function bodies receive `comp`; arbitrary JSX is not sandboxed. |
+| `ae_collab_note` / `ae_collab_status` | Share short notes and inspect claims, registered comp IDs, last commit and lock state. Notes are limited to 100 per session. |
+| `ae_collab_close` | Close an unlocked session after all claims are released; it can then be previewed/deleted by the managed cleanup tool. |
+| `ae_collab_resolve` | Manual recovery only: after independently confirming **all** helpers stopped and inspecting the saved AEP, supply `agentId`, `reason`, `confirmHelperStopped: true` and `acceptSavedProject: true`. Never auto-resolve or break an active lock. Initialization failures resolve to a closed session. |
 | `ae_test_session_create` | Creates a marked disposable session in the OS temp directory; returns `sessionDir` and `projectPath`. Create new test projects at `projectPath`, pass `sessionDir` as `workDir`, and preserve wanted deliverables elsewhere. |
 | `ae_test_cleanup` | Windows PowerShell previews managed sessions by default; set `delete: true` for one-click cleanup, or additionally specify `sessionId`. Skips reparse points and pending/unknown runs. It does not close projects, clean legacy paths, or protect a session concurrently used by another client; only clean after use has stopped. |
 | `ae_jsx_status` | Inspect a prior CLI `host-result.json` after a timeout; CDP timeouts have no late result file. Missing, partial, or nonterminal results are unknown, not cancelled; do not automatically retry. |
@@ -105,3 +111,12 @@ Primary sources:
 - [Adobe automated rendering and aerender process behavior](https://helpx.adobe.com/after-effects/using/automated-rendering-network-rendering.html).
 - [Adobe CEP cookbook: remote debugging and evalScript](https://github.com/Adobe-CEP/CEP-Resources/blob/master/CEP_12.x/Documentation/CEP%2012%20HTML%20Extension%20Cookbook.md).
 - [Official Codex MCP configuration](https://developers.openai.com/codex/mcp).
+
+## Multiple agents sharing a test AEP
+
+1. Call `ae_collab_create`; distribute the returned `sessionId` to participating agents. This creates a new disposable test project, not a copy of the user's existing project.
+2. Each agent calls `ae_collab_claim` with its `agentId` and a unique `compName`. Handoffs require release and a new claim. `ae_collab_status` and `ae_collab_note` provide shared coordination.
+3. Agents use `ae_collab_run` with `code` and `verifyCode`. Example: `code: "comp.layers.addNull().name='Marker'; return comp.numLayers;"` and `verifyCode: "return comp.layer(1).name==='Marker';"`. The helper opens the same saved AEP, verifies, and saves before releasing the cross-process lock. Busy responses mean no operation started and may be retried; after a timeout or failed operation, do not retry or clear the lock automatically.
+4. Release all claims, call `ae_collab_close`, preserve wanted artifacts elsewhere, then use `ae_test_cleanup`.
+
+These are cooperative controls, not authorization or a security sandbox. Arbitrary JSX, `ae_execute_jsx`, an older MCP server, or external AE processes can bypass claims or call `save` directly. All writers must use the collaboration tools, and no other AE process should open or edit the project during the session. Work is serialized, not simultaneous live editing. Only the isolated Windows CLI workflow has live-host evidence; other versions and platforms require their own verification. Render jobs must be scheduled after writes complete; the collaboration lock does not cover `ae_render_start`.

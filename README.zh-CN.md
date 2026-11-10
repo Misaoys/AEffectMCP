@@ -7,8 +7,8 @@
 <p>
   <a href="LICENSE"><img alt="MIT 许可证" src="assets/badge-license.svg"></a>
   <img alt="Node.js 22+" src="assets/badge-node.svg">
-  <img alt="11 个 MCP 工具" src="assets/badge-tools.svg">
-  <img alt="版本 1.2" src="assets/badge-version.svg">
+  <img alt="19 个 MCP 工具" src="assets/badge-tools.svg">
+  <img alt="版本 1.3" src="assets/badge-version.svg">
 </p>
 
 [English](README.md) · [中文说明](README.zh-CN.md)
@@ -55,7 +55,7 @@ node scripts/ae-mcp.mjs --call ae_discover
 }
 ```
 
-重新加载 MCP 或重启 Trae，检查 `ae-mcp` 是否显示 11 个工具。以上配置依赖客户端继承 Windows 系统环境变量；如果出现 AE 无结果而直接命令可用，参见 [Windows 环境变量说明](references/mcp-control.md#installation-and-connection)。
+重新加载 MCP 或重启 Trae，检查 `ae-mcp` 是否显示 19 个工具。以上配置依赖客户端继承 Windows 系统环境变量；如果出现 AE 无结果而直接命令可用，参见 [Windows 环境变量说明](references/mcp-control.md#installation-and-connection)。
 
 ### 接入 Codex
 
@@ -68,6 +68,12 @@ node scripts/ae-mcp.mjs --call ae_discover
 如需 Codex 技能，将仓库克隆到 skills 目录，文件夹命名为 `ae-mcp`，再使用 `$ae-mcp`。技能安装与 MCP 服务注册是两件事。
 
 项目名称为 AEffectMCP；保留 `ae-mcp` 技能/配置键、脚本文件名和原有 `ae_*` 工具，兼容已经安装的调用方式。
+
+## 多个 Agent 协作测试
+
+调用 `ae_collab_create` 创建共享临时 AEP，把返回的 `sessionId` 分配给各 agent。每个 agent 通过 `ae_collab_claim` 认领不同合成，使用 `ae_collab_run` 执行 JSX 和结果断言；通过 `ae_collab_note` / `ae_collab_status` 共享进度。需要移交时先释放认领，全部结束后释放所有认领并关闭会话，再清理临时目录。
+
+写入在不同 MCP 进程之间串行执行，不是多个 AE 进程同时编辑。认领是协作约定：直接运行 JSX、其他 AE 进程或旧版 MCP 都能绕过它，因此所有写入方必须使用协作接口。执行失败或超时后锁会保留；只有人工确认所有辅助进程已退出并检查已保存工程后，才能使用 `ae_collab_resolve`。不要自动重试状态不明的操作。此流程创建新的临时测试工程，暂不直接接管已有用户工程。[完整流程与限制](references/mcp-control.md#multiple-agents-sharing-a-test-aep)。
 
 ## 真实宿主与隔离测试
 
@@ -83,7 +89,7 @@ JSX 与面板表达式可以修改工程和文件。执行 JSX 时可提供 `ver
 
 ## 验证
 
-- 18 项 Node 回归测试和 10 个 PowerShell 采集器场景。
+- 21 项 Node 回归测试和 10 个 PowerShell 采集器场景。
 - AE 25.6.4 Windows 隔离实例通过临时工程保存和执行后断言；清理验证删除了该测试会话。
 - 官方 MCP SDK 在真实 AE 25.5x4 中完成合成、图层、关键帧、表达式、标记、工程重开及原生 Fill 效果测试。
 - aerender 输出 25 帧 64×64 TIFF，409,600 个 RGBA 样本全部符合预乘颜色、透明度变化和 8 位导出量化预期。

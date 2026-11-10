@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { collabCreate, collabRun } from './ae-collab.mjs';
 import { TOOLS, hostWrapper, callTool, cdpEvaluate, macBundleAerenderCandidates } from './ae-mcp.mjs';
 
 const serverPath = fileURLToPath(new URL('./ae-mcp.mjs', import.meta.url));
@@ -29,6 +30,8 @@ test('ES3 wrapper preserves Unicode, control characters, quotes and nested JSON 
 test('host execution is distinct from postcondition verification', () => {
   const unverified = JSON.parse(vm.runInContext(hostWrapper({ runId: 'none', code: 'return 1;' }), fakeHost()));
   assert.equal(unverified.success, true); assert.equal(unverified.verificationStatus, 'not_requested');
+  const collabResult = JSON.parse(vm.runInContext(hostWrapper({runId:'shared',code:'return {verified:true};',verifyCode:'return result.data && result.data.verified === true;'}), fakeHost()));
+  assert.equal(collabResult.verificationStatus, 'passed');
   const passed = JSON.parse(vm.runInContext(hostWrapper({ runId: 'pass', code: 'app.project.value=42;', verifyCode: 'return app.project.value === 42;' }), fakeHost()));
   assert.equal(passed.success, true); assert.equal(passed.verificationStatus, 'passed');
   const failed = JSON.parse(vm.runInContext(hostWrapper({ runId: 'fail', code: 'app.project.value=1;', verifyCode: 'return app.project.value === 42;' }), fakeHost()));
@@ -47,6 +50,96 @@ test('managed session preview and cleanup skip pending work', async () => {
   const deletion = await callTool('ae_test_cleanup', { delete: true, sessionId: session.sessionId });
   assert.equal(deletion.sessions[0].action, 'deleted');
   await assert.rejects(fs.access(session.sessionDir));
+});
+test('collaboration coordinates claims, handoff, notes and managed cleanup', async () => {
+  const fakeCreate = async () => {
+    const session = await callTool('ae_test_session_create', {});
+    await fs.writeFile(path.join(session.sessionDir, '.ae-mcp-collab.json'), JSON.stringify({schemaVersion:1,sessionId:session.sessionId,state:'initializing',claims:[],notes:[]}));
+    return session;
+  };
+  const fakeExecute = async () => ({success:true, resultPath:'fixture', data:{verified:true,compId:123}});
+  const session = await collabCreate({}, fakeCreate, fakeExecute);
+  const sessionId = session.sessionId;
+  try {
+    await callTool('ae_collab_claim', {sessionId,agentId:'agent_a',compName:'Comp A'});
+    await assert.rejects(callTool('ae_collab_claim', {sessionId,agentId:'agent_b',compName:'Comp A'}), /already claimed/);
+    await callTool('ae_collab_claim', {sessionId,agentId:'agent_b',compName:'Comp B'});
+    await callTool('ae_collab_note', {sessionId,agentId:'agent_a',message:'Ready for review'});
+    const result = await collabRun({sessionId,agentId:'agent_a',compName:'Comp A',code:'return 1;',verifyCode:'return true;'}, fakeExecute);
+    assert.equal(result.committed,true);
+    let status = await callTool('ae_collab_status',{sessionId});
+    assert.equal(status.claims.length,2); assert.equal(status.notes[0].message,'Ready for review'); assert.equal(status.comps[0].compId,123);
+    if (process.platform === 'win32') {
+      const preview = await callTool('ae_test_cleanup',{sessionId});
+      assert.equal(preview.sessions[0].action,'skipped');
+    }
+    await assert.rejects(callTool('ae_collab_close',{sessionId}), /Release all/);
+    await callTool('ae_collab_release',{sessionId,agentId:'agent_a',compName:'Comp A'});
+    await callTool('ae_collab_claim',{sessionId,agentId:'agent_b',compName:'Comp A'});
+    status = await callTool('ae_collab_status',{sessionId});
+    assert.equal(status.claims.find(x=>x.compName==='Comp A').compId,123);
+    await callTool('ae_collab_release',{sessionId,agentId:'agent_b',compName:'Comp A'});
+    await callTool('ae_collab_release',{sessionId,agentId:'agent_b',compName:'Comp B'});
+    await callTool('ae_collab_close',{sessionId});
+    await assert.rejects(callTool('ae_collab_claim',{sessionId,agentId:'agent_a',compName:'Comp A'}), /not active/);
+    if (process.platform === 'win32') {
+      const removed = await callTool('ae_test_cleanup',{delete:true,sessionId});
+      assert.equal(removed.sessions[0].action,'deleted');
+    }
+  } finally {
+    // The fixture owns this exact path and never starts an AE process.
+    assert.equal(path.dirname(session.sessionDir), path.join((await import('node:os')).tmpdir(),'AEffectMCP-managed-tests'));
+    await fs.rm(session.sessionDir,{recursive:true,force:true});
+  }
+});
+test('separate MCP processes cannot claim the same composition', async () => {
+  const fakeCreate = async () => {
+    const session = await callTool('ae_test_session_create', {});
+    await fs.writeFile(path.join(session.sessionDir, '.ae-mcp-collab.json'), JSON.stringify({schemaVersion:1,sessionId:session.sessionId,state:'initializing',claims:[],notes:[]}));
+    return session;
+  };
+  const session = await collabCreate({}, fakeCreate, async()=>({success:true,resultPath:'fixture'}));
+  const dir = await fs.mkdtemp(path.join(work,'claim-race-'));
+  try {
+    async function competing(agentId) {
+      const f = path.join(dir,agentId+'.json');
+      await fs.writeFile(f,JSON.stringify({sessionId:session.sessionId,agentId,compName:'Shared'}));
+      const child = spawn(process.execPath,[serverPath,'--call','ae_collab_claim','--args-file',f],{windowsHide:true});
+      let stderr='';child.stderr.on('data',d=>stderr+=d);
+      const code = await new Promise(resolve=>child.on('close',resolve));
+      return {code,stderr};
+    }
+    const results = await Promise.all([competing('a'),competing('b')]);
+    assert.equal(results.filter(x=>x.code===0).length,1);
+    assert.match(results.find(x=>x.code!==0).stderr,/busy or blocked|already claimed/);
+    const status = await callTool('ae_collab_status',{sessionId:session.sessionId});
+    assert.equal(status.claims.length,1);
+  } finally {
+    assert.equal(path.dirname(session.sessionDir),path.join((await import('node:os')).tmpdir(),'AEffectMCP-managed-tests'));
+    await fs.rm(session.sessionDir,{recursive:true,force:true});
+    await fs.rm(dir,{recursive:true,force:true});
+  }
+});
+test('collaboration timeout retains lock and blocks other writers', async () => {
+  const fakeCreate = async () => {
+    const session = await callTool('ae_test_session_create', {});
+    await fs.writeFile(path.join(session.sessionDir, '.ae-mcp-collab.json'), JSON.stringify({schemaVersion:1,sessionId:session.sessionId,state:'initializing',claims:[],notes:[]}));
+    return session;
+  };
+  const session = await collabCreate({}, fakeCreate, async()=>({success:true,resultPath:'fixture'}));
+  try {
+    await callTool('ae_collab_claim',{sessionId:session.sessionId,agentId:'agent_a',compName:'A'});
+    await assert.rejects(collabRun({sessionId:session.sessionId,agentId:'agent_a',compName:'A',code:'return 1;',verifyCode:'return true;'}, async()=>{throw new Error('timeout');}),/remains locked/);
+    assert.equal((await callTool('ae_collab_status',{sessionId:session.sessionId})).locked,true);
+    await assert.rejects(callTool('ae_collab_claim',{sessionId:session.sessionId,agentId:'agent_b',compName:'B'}),/busy or blocked/);
+    if (process.platform === 'win32') assert.equal((await callTool('ae_test_cleanup',{sessionId:session.sessionId})).sessions[0].action,'skipped');
+    await assert.rejects(callTool('ae_collab_resolve',{sessionId:session.sessionId,agentId:'operator',reason:'fixture',confirmHelperStopped:false,acceptSavedProject:true}),/explicit confirmation/);
+    const recovered = await callTool('ae_collab_resolve',{sessionId:session.sessionId,agentId:'operator',reason:'No real process was started in this fixture',confirmHelperStopped:true,acceptSavedProject:true});
+    assert.equal(recovered.recovered,true); assert.equal((await callTool('ae_collab_status',{sessionId:session.sessionId})).locked,false);
+  } finally {
+    assert.equal(path.dirname(session.sessionDir), path.join((await import('node:os')).tmpdir(),'AEffectMCP-managed-tests'));
+    await fs.rm(session.sessionDir,{recursive:true,force:true});
+  }
 });
 test('JSX status distinguishes missing, partial, stale and completed host results', async () => {
   const dir = await fs.mkdtemp(path.join(work, 'status-'));
@@ -118,7 +211,7 @@ test('stdio negotiates protocol, lists tools and returns tool failures as isErro
   const messages = stdout.trim().split('\n').map(x => JSON.parse(x));
   const byId = new Map(messages.map(m => [m.id, m]));
   assert.equal(messages.length, 5); assert.equal(byId.get(0).error.code, -32002);
-  assert.equal(byId.get(1).result.protocolVersion, '2025-06-18'); assert.equal(byId.get(2).result.tools.length, 11);
+  assert.equal(byId.get(1).result.protocolVersion, '2025-06-18'); assert.equal(byId.get(2).result.tools.length, 19);
   assert.equal(byId.get(3).result.isError, true); assert.deepEqual(byId.get(4).result, {});
 });
 

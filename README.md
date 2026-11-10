@@ -7,8 +7,8 @@
 <p>
   <a href="LICENSE"><img alt="MIT license" src="assets/badge-license.svg"></a>
   <img alt="Node.js 22+" src="assets/badge-node.svg">
-  <img alt="11 MCP tools" src="assets/badge-tools.svg">
-  <img alt="Version 1.2" src="assets/badge-version.svg">
+  <img alt="19 MCP tools" src="assets/badge-tools.svg">
+  <img alt="Version 1.3" src="assets/badge-version.svg">
 </p>
 
 [English](README.md) · [中文说明](README.zh-CN.md)
@@ -37,6 +37,7 @@ The server has **zero npm dependencies**. Node.js 22 or newer is required. After
 | `ae_test_session_create` | Create a managed temporary session for disposable test projects |
 | `ae_test_cleanup` | Preview or delete eligible managed test sessions on Windows |
 | `ae_jsx_status` | Inspect a previous CLI JSX result after a timeout |
+| `ae_collab_*` | Share a disposable AEP across agents with comp claims, notes, serialized writes, and manual recovery |
 
 ## Quick start
 
@@ -72,7 +73,7 @@ AE_MCP_AFTERFX = 'C:/Program Files/Adobe/Adobe After Effects 2025/Support Files/
 AE_MCP_AERENDER = 'C:/Program Files/Adobe/Adobe After Effects 2025/Support Files/aerender.exe'
 ```
 
-Reconnect your MCP client and confirm that it lists the 11 tools. Installing the skill alone does not register the server.
+Reconnect your MCP client and confirm that it lists the 19 tools. Installing the skill alone does not register the server.
 
 The Windows environment forwarding above was verified with the official MCP SDK. Its default reduced environment did not deliver an AE result on the tested machine; the supplied system-only set restored the full host/render flow. Other clients should preserve the corresponding system variables without forwarding unrelated credentials.
 
@@ -101,11 +102,17 @@ Open Settings → MCP → Add → manual configuration and merge the following e
 }
 ```
 
-Reload the server or restart Trae and check for 11 tools. The client must inherit the necessary Windows system environment; see the [transport reference](references/mcp-control.md#installation-and-connection) if AE delivery fails.
+Reload the server or restart Trae and check for 19 tools. The client must inherit the necessary Windows system environment; see the [transport reference](references/mcp-control.md#installation-and-connection) if AE delivery fails.
 
 ### Updating
 
 Check `git status` in the clone and preserve any local changes, then run `git pull --ff-only`. If the MCP configuration points at a separately copied installation, update that copy including `assets/` and `scripts/`, or point the client to the clone. Reload the MCP client.
+
+## Multi-agent testing
+
+Create a disposable shared AEP with `ae_collab_create`. Share its `sessionId`, have each agent claim a distinct comp with `ae_collab_claim`, and perform verified writes via `ae_collab_run`. Agents can exchange notes through `ae_collab_note` and inspect claims and lock status with `ae_collab_status`. Release claims and close the session before managed cleanup.
+
+Writes are serialized across MCP processes, not simultaneous editing. Claims are cooperative: arbitrary JSX, other AE processes and older MCP servers can bypass them. All writers must use the collaboration API. Failure or timeout leaves the lock in place; `ae_collab_resolve` requires manual confirmation that every helper has stopped and the saved project has been inspected. Never retry an unknown mutation automatically. Only a new disposable test project is created; opening a user's existing project is not supported by this workflow. [Full workflow and limitations](references/mcp-control.md#multiple-agents-sharing-a-test-aep).
 
 ## Run an isolated AE probe
 
@@ -139,7 +146,7 @@ Read [the transport and tool reference](references/mcp-control.md) for schemas, 
 ## Verification and limits
 
 - Windows AE 25.6.4 also passed a managed temporary-project save and host postcondition check; the test session was deleted.
-- 18 Node regression tests cover JSON serialization, host checks, isolated helper ownership, MCP protocol, CDP callbacks/errors/timeouts and asynchronous render failure reporting.
+- 21 Node regression tests cover JSON serialization, host checks, isolated helper ownership, MCP protocol, CDP callbacks/errors/timeouts and asynchronous render failure reporting.
 - The PowerShell collector has 10 regression scenarios for manifest/resources, path containment, debug ports and installed-file parity.
 - A Windows AE 25.5x4 test through the official MCP SDK verified compositions, layers, keyframes, expressions, markers, reopening a saved test project and the native `ADBE Fill` effect.
 - An actual aerender job produced 25 frames of 64×64 RGBA TIFF. All 409,600 decoded samples matched the analytical premultiplied color/opacity expectation at the adjacent 8-bit quantization levels.

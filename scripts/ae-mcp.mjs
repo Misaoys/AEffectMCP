@@ -4,6 +4,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { collabCreate, collabStatus, collabClaim, collabRelease, collabNote, collabRun, collabClose, collabResolve } from './ae-collab.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
@@ -38,6 +39,14 @@ export const TOOLS = [
   }, ['projectPath', 'comp', 'outputName']),
   tool('ae_test_session_create', 'Create a managed temporary test session for JSX/AEX fixtures; save the isolated test project at projectPath and use sessionDir as workDir. Never use this for user projects.', {}, []),
   tool('ae_test_cleanup', 'Delete managed temporary test sessions using PowerShell on Windows. Defaults to preview. Set delete=true to delete eligible sessions; sessions with pending or unknown execution are skipped.', { delete: { type: 'boolean' }, sessionId: str }, []),
+  tool('ae_collab_create', 'Create one disposable shared AEP in an isolated AE helper. Agents coordinate by sessionId; operations are serialized across MCP processes.', { afterfxPath: str, timeoutMs: transport.timeoutMs }, []),
+  tool('ae_collab_status', 'Read shared project, composition claims, coordination notes and lock status.', { sessionId: str }, ['sessionId'], true),
+  tool('ae_collab_claim', 'Claim a named composition exclusively for an agent in a shared test project. Claims are cooperative, not a JSX sandbox.', { sessionId: str, agentId: str, compName: str }, ['sessionId', 'agentId', 'compName']),
+  tool('ae_collab_release', 'Release an agent composition claim for handoff.', { sessionId: str, agentId: str, compName: str }, ['sessionId', 'agentId', 'compName']),
+  tool('ae_collab_note', 'Share a short coordination note with the other agents in this test session.', { sessionId: str, agentId: str, message: str }, ['sessionId', 'agentId', 'message']),
+  tool('ae_collab_run', 'Execute code against the claimed comp in the shared AEP via an isolated helper. Saves only after verifyCode returns true. Cross-process lock stays on failures or timeouts. Code can access comp and is not sandboxed.', { sessionId: str, agentId: str, compName: str, code: str, verifyCode: str, afterfxPath: str, timeoutMs: transport.timeoutMs, width: { type: 'integer', minimum: 1, maximum: 30000 }, height: { type: 'integer', minimum: 1, maximum: 30000 }, duration: { type: 'number', minimum: 0.1, maximum: 10800 }, frameRate: { type: 'number', minimum: 1, maximum: 99 } }, ['sessionId', 'agentId', 'compName', 'code', 'verifyCode']),
+  tool('ae_collab_resolve', 'Operator recovery for a blocked AE operation only after independently confirming ALL helpers stopped and inspecting the saved project. Never use automatically or to break an active lock.', { sessionId: str, agentId: str, reason: str, confirmHelperStopped: { type: 'boolean' }, acceptSavedProject: { type: 'boolean' } }, ['sessionId', 'agentId', 'reason', 'confirmHelperStopped', 'acceptSavedProject']),
+  tool('ae_collab_close', 'Close an idle shared session after all claims are released; then it becomes eligible for managed cleanup.', { sessionId: str }, ['sessionId']),
   tool('ae_jsx_status', 'Inspect a previous JSX result after timeout; timeout never means the operation was cancelled. Supply resultPath from the timeout. This does not execute or retry JSX.', { resultPath: str }, ['resultPath'], true),
   tool('ae_render_status', 'Read a render job result and output inventory. Exit zero and nonempty outputs prove delivery only; compare pixels/frames for behavior assertions.', { jobPath: str }, ['jobPath'], true)
 ];
@@ -50,7 +59,7 @@ function validate(name, args) {
     const s = t.inputSchema.properties[k];
     if (!s) throw new Error('Unknown argument: ' + k);
     const valid = s.type === 'array' ? Array.isArray(v) && v.every(x => typeof x === 'string' && x.length > 0) :
-      s.type === 'integer' ? Number.isSafeInteger(v) : typeof v === s.type;
+      s.type === 'integer' ? Number.isSafeInteger(v) : s.type === 'number' ? typeof v === 'number' && Number.isFinite(v) : typeof v === s.type;
     if (!valid || (s.minLength && !v.length) || (s.minimum !== undefined && v < s.minimum) ||
         (s.maximum !== undefined && v > s.maximum) || (s.enum && !s.enum.includes(v))) throw new Error('Invalid argument: ' + k);
   }
@@ -246,12 +255,13 @@ async function executeJsx(a) {
   return { ...payload, resultPath, scriptPath, evidenceLevel: 'live-host', verifiedScope: payload.success && payload.verificationStatus === 'passed' ? 'Host invocation and supplied postcondition passed; validate its coverage and rendered pixels separately.' : 'Feature correctness is not established; inspect the host result and verification status.' };
 }
 const TEST_ROOT = path.join(os.tmpdir(), 'AEffectMCP-managed-tests');
-async function createTestSession() {
+async function createTestSession(collaboration = false) {
   await fs.mkdir(TEST_ROOT, { recursive: true });
   const rootInfo = await fs.lstat(TEST_ROOT);
   if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error('Managed test root must be a real directory');
   const sessionDir = await fs.mkdtemp(path.join(TEST_ROOT, 'session-'));
   const sessionId = path.basename(sessionDir);
+  if (collaboration) await jsonWrite(path.join(sessionDir, '.ae-mcp-collab.json'), { schemaVersion: 1, sessionId, state: 'initializing', claims: [], notes: [] });
   await jsonWrite(path.join(sessionDir, '.ae-mcp-session.json'), { schemaVersion: 1, sessionId, createdAt: new Date().toISOString() });
   return { sessionId, sessionDir, projectPath: path.join(sessionDir, 'test-project.aep'), cleanupTool: 'ae_test_cleanup', note: 'Use only for disposable test assets. Preserve requested deliverables elsewhere before cleanup.' };
 }
@@ -344,6 +354,14 @@ export async function callTool(name, args = {}) {
     case 'ae_test_session_create': return createTestSession();
     case 'ae_test_cleanup': return cleanupTestSessions(args);
     case 'ae_jsx_status': return jsxStatus(args);
+    case 'ae_collab_create': return collabCreate(args, createTestSession, executeJsx);
+    case 'ae_collab_status': return collabStatus(args);
+    case 'ae_collab_claim': return collabClaim(args);
+    case 'ae_collab_release': return collabRelease(args);
+    case 'ae_collab_note': return collabNote(args);
+    case 'ae_collab_run': return collabRun(args, executeJsx);
+    case 'ae_collab_close': return collabClose(args);
+    case 'ae_collab_resolve': return collabResolve(args);
     case 'ae_render_status': return JSON.parse(await fs.readFile(absolute(args.jobPath, 'jobPath'), 'utf8'));
   }
 }
@@ -359,8 +377,8 @@ async function stdioServer() {
       if (request.method === 'initialize') {
         initialized = true;
         const requested = request.params?.protocolVersion;
-        result = { protocolVersion: SUPPORTED.includes(requested) ? requested : SUPPORTED[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'AEffectMCP', version: '1.2.0', icons: ICONS },
-          instructions: 'Control Adobe After Effects through JSX, CEP CDP and aerender without computer use. Discover exact executables and CEP target first. Preserve user projects and sessions. Timeout does not cancel a mutation; never blindly retry it. For isolated JSX/AEX tests create a managed temporary test session, save its project at projectPath and use sessionDir as workDir. Cleanup only through ae_test_cleanup; preserve requested deliverables. Use verifyCode for postcondition assertions. Host execution alone does not prove effects. Timeout is unknown, never blindly retry. Report source, installed, loader, live-host and pixel/render proof separately. Execute destructive actions only within user authorization.' };
+        result = { protocolVersion: SUPPORTED.includes(requested) ? requested : SUPPORTED[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'AEffectMCP', version: '1.3.0', icons: ICONS },
+          instructions: 'Control Adobe After Effects through JSX, CEP CDP and aerender without computer use. Discover exact executables and CEP target first. Preserve user projects and sessions. Timeout does not cancel a mutation; never blindly retry it. For multi-agent test collaboration use ae_collab_create, claim a composition per agent, coordinate through notes, execute verified changes through ae_collab_run, and release claims before closing. All agents must use this cooperative API; locks do not restrict arbitrary JSX or external AE processes. For isolated JSX/AEX tests create a managed temporary test session, save its project at projectPath and use sessionDir as workDir. Cleanup only through ae_test_cleanup; preserve requested deliverables. Use verifyCode for postcondition assertions. Host execution alone does not prove effects. Timeout is unknown, never blindly retry. Report source, installed, loader, live-host and pixel/render proof separately. Execute destructive actions only within user authorization.' };
       } else if (request.method === 'ping') result = {};
       else if (!initialized) { reply({ id: request.id, error: { code: -32002, message: 'Initialize first' } }); return; }
       else if (request.method === 'tools/list') result = { tools: TOOLS };
@@ -376,7 +394,7 @@ async function stdioServer() {
     try { request = JSON.parse(line); } catch { reply({ id: null, error: { code: -32700, message: 'Parse error' } }); continue; }
     if (!request || request.jsonrpc !== '2.0' || typeof request.method !== 'string' || Array.isArray(request)) { reply({ id: request?.id ?? null, error: { code: -32600, message: 'Invalid request' } }); continue; }
     if (!('id' in request)) continue;
-    const queued = initialized && request.method === 'tools/call' && request.params?.name !== 'ae_render_status';
+    const queued = initialized && request.method === 'tools/call' && !['ae_render_status', 'ae_collab_status', 'ae_jsx_status'].includes(request.params?.name);
     const task = queued ? toolQueue.then(() => handle(request)) : handle(request);
     if (queued) toolQueue = task.catch(() => {});
     pending.add(task);
