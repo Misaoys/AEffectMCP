@@ -8,7 +8,7 @@
   <a href="LICENSE"><img alt="MIT 许可证" src="assets/badge-license.svg"></a>
   <img alt="Node.js 22+" src="assets/badge-node.svg">
   <img alt="19 个 MCP 工具" src="assets/badge-tools.svg">
-  <img alt="版本 1.3" src="assets/badge-version.svg">
+  <img alt="版本 1.4" src="assets/badge-version.svg">
 </p>
 
 [English](README.md) · [中文说明](README.zh-CN.md)
@@ -71,9 +71,9 @@ node scripts/ae-mcp.mjs --call ae_discover
 
 ## 多个 Agent 协作测试
 
-调用 `ae_collab_create` 创建共享临时 AEP，把返回的 `sessionId` 分配给各 agent。每个 agent 通过 `ae_collab_claim` 认领不同合成，使用 `ae_collab_run` 执行 JSX 和结果断言；通过 `ae_collab_note` / `ae_collab_status` 共享进度。需要移交时先释放认领，全部结束后释放所有认领并关闭会话，再清理临时目录。
+调用 `ae_collab_create` 创建共享临时 AEP；要测试已有工程时，在 `sourceProjectPath` 填入已保存的 AEP/AEPX 绝对路径，MCP 会校验并打开临时副本，返回合成 ID 与缺失素材信息。把返回的 `sessionId` 分配给各 agent。每个 agent 通过 `ae_collab_claim` 认领不同合成，使用 `ae_collab_run` 执行 JSX 和结果断言；通过 `ae_collab_note` / `ae_collab_status` 共享进度。需要移交时先释放认领，全部结束后释放所有认领并关闭会话，再清理临时目录。
 
-写入在不同 MCP 进程之间串行执行，不是多个 AE 进程同时编辑。认领是协作约定：直接运行 JSX、其他 AE 进程或旧版 MCP 都能绕过它，因此所有写入方必须使用协作接口。执行失败或超时后锁会保留；只有人工确认所有辅助进程已退出并检查已保存工程后，才能使用 `ae_collab_resolve`。不要自动重试状态不明的操作。此流程创建新的临时测试工程，暂不直接接管已有用户工程。[完整流程与限制](references/mcp-control.md#multiple-agents-sharing-a-test-aep)。
+写入在不同 MCP 进程之间串行执行，不是多个 AE 进程同时编辑。认领是协作约定：直接运行 JSX、其他 AE 进程或旧版 MCP 都能绕过它，因此所有写入方必须使用协作接口。执行失败或超时后锁会保留；只有人工确认所有辅助进程已退出并检查已保存工程后，才能使用 `ae_collab_resolve`。不要自动重试状态不明的操作。副本只包含磁盘上已保存的工程，不包含 AE 中未保存的修改。同名合成需用 `compId` 区分。素材、字体和插件不会随工程复制，任意 JSX 也不受沙箱限制，仍可能写入原工程或外部文件。请检查缺失素材并自行保留需要的测试结果；不会自动写回原工程。[完整流程与限制](references/mcp-control.md#multiple-agents-sharing-a-test-aep)。
 
 ## 真实宿主与隔离测试
 
@@ -89,7 +89,7 @@ JSX 与面板表达式可以修改工程和文件。执行 JSX 时可提供 `ver
 
 ## 验证
 
-- 21 项 Node 回归测试和 10 个 PowerShell 采集器场景。
+- 22 项 Node 回归测试和 10 个 PowerShell 采集器场景。
 - AE 25.6.4 Windows 隔离实例通过临时工程保存和执行后断言；清理验证删除了该测试会话。
 - 官方 MCP SDK 在真实 AE 25.5x4 中完成合成、图层、关键帧、表达式、标记、工程重开及原生 Fill 效果测试。
 - aerender 输出 25 帧 64×64 TIFF，409,600 个 RGBA 样本全部符合预乘颜色、透明度变化和 8 位导出量化预期。

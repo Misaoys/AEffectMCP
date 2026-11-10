@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { createReadStream, constants as fsConstants } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 const ROOT = path.join(os.tmpdir(), 'AEffectMCP-managed-tests');
 const tag = '.ae-mcp-collab.json';
@@ -43,26 +45,69 @@ async function locked(dir, operation, fn) {
   } finally { if (!retain) await fs.rm(lock, { recursive: true, force: true }); }
 }
 function active(m) { if (m.state !== 'active') throw new Error('Collaboration session is not active'); }
-function projectPath(dir) { return path.join(dir, 'test-project.aep'); }
+function projectPath(dir, data) {
+  const expected = path.join(dir, data.source ? 'test-project' + data.source.extension : 'test-project.aep');
+  if (path.resolve(data.projectPath) !== expected) throw new Error('Invalid shared project path');
+  return expected;
+}
+async function digest(p) {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(p)) hash.update(chunk);
+  return hash.digest('hex');
+}
+async function snapshot(source, target) {
+  const before = await fs.stat(source);
+  if (!before.isFile()) throw new Error('Source project must be a regular file');
+  const beforeHash = await digest(source);
+  await fs.copyFile(source, target, fsConstants.COPYFILE_EXCL);
+  const [copyHash, afterHash, after] = await Promise.all([digest(target), digest(source), fs.stat(source)]);
+  if (beforeHash !== copyHash || beforeHash !== afterHash || before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error('Source changed while copying; snapshot rejected');
+  return { sha256: beforeHash, bytes: before.size, sourceMtimeMs: before.mtimeMs };
+}
 function jsxPath(p) { return JSON.stringify(p.replace(/\\/g, '/')); }
 
 export async function collabCreate(a, createSession, execute) {
+  let source = null;
+  if (a.sourceProjectPath) {
+    if (!path.isAbsolute(a.sourceProjectPath)) throw new Error('sourceProjectPath must be absolute');
+    const resolved = await fs.realpath(a.sourceProjectPath);
+    const extension = path.extname(resolved).toLowerCase();
+    if (!['.aep', '.aepx'].includes(extension)) throw new Error('Source must be an existing .aep or .aepx file');
+    if (!(await fs.stat(resolved)).isFile()) throw new Error('Source project must be a regular file');
+    source = { path: resolved, extension };
+  }
   const session = await createSession(true), dir = session.sessionDir;
-  const initial = { schemaVersion: 1, sessionId: session.sessionId, state: 'initializing', projectPath: session.projectPath, claims: [], comps: [], notes: [] };
+  if (source) session.projectPath = path.join(dir, 'test-project' + source.extension);
+  const initial = { schemaVersion: 1, sessionId: session.sessionId, state: 'initializing', projectPath: session.projectPath, source, claims: [], comps: [], notes: [] };
   await write(path.join(dir, tag), initial);
   return locked(dir, 'initialize', async control => {
+    if (source) {
+      try { Object.assign(source, await snapshot(source.path, session.projectPath)); await write(path.join(dir, tag), initial); }
+      catch (e) {
+        initial.state = 'closed'; initial.initializationError = 'Snapshot rejected'; await write(path.join(dir, tag), initial);
+        throw new Error('Source snapshot rejected; sessionId=' + session.sessionId + '; ' + e.message);
+      }
+    }
     control.retain();
     const p = jsxPath(session.projectPath);
+    const inspect = `var names=[],missing=[],missingCount=0;for(var i=1;i<=app.project.numItems;i++){var x=app.project.item(i);` +
+      `if(x instanceof CompItem)names.push({compName:x.name,compId:x.id});` +
+      `try{if(typeof FootageItem!=='undefined' && x instanceof FootageItem && x.footageMissing){missingCount++;if(missing.length<50)missing.push(x.name);}}catch(ignore){}}` +
+      `return {project:app.project.file.fsName,comps:names,missingFootageCount:missingCount,missingFootage:missing};`;
+    const code = source ? `var f=new File(${p});if(!f.exists)throw new Error('Snapshot missing');app.open(f);` + inspect :
+      `app.project.save(new File(${p}));` + inspect;
     let result;
-    try { result = await execute({ launchMode: 'isolated', afterfxPath: a.afterfxPath, workDir: dir, timeoutMs: a.timeoutMs || 55000,
-      code: `app.project.save(new File(${p}));return {project:app.project.file.fsName};`,
+    try { result = await execute({ launchMode: 'isolated', afterfxPath: a.afterfxPath, workDir: dir, timeoutMs: a.timeoutMs || 55000, code,
       verifyCode: `return app.project.file && app.project.file.fsName.replace(/\\\\/g,'/').toLowerCase()===${p}.toLowerCase();` }); }
     catch (e) { throw new Error('Collaboration initialization blocked; sessionId=' + session.sessionId + '; ' + e.message); }
-    if (!result.success) throw new Error('Initial project creation failed; session locked. result=' + result.resultPath);
+    if (!result.success) throw new Error('Initial project inspection failed; sessionId=' + session.sessionId + '; session locked. result=' + result.resultPath);
+    if (source && !Array.isArray(result.data?.comps)) throw new Error('Composition inventory missing; sessionId=' + session.sessionId + '; session remains locked');
+    initial.comps = result.data?.comps || []; initial.missingFootageCount = result.data?.missingFootageCount ?? null;
+    initial.missingFootage = result.data?.missingFootage || [];
     initial.state = 'active'; initial.createdAt = new Date().toISOString();
     await write(path.join(dir, tag), initial);
     await fs.rm(path.join(dir, lockName), { recursive: true });
-    return { ...session, state: 'active', resultPath: result.resultPath, coordination: 'Serialized isolated helpers share one saved AEP; use only collaboration tools for writes.' };
+    return { ...session, state: 'active', source, comps: initial.comps, missingFootageCount: initial.missingFootageCount, missingFootage: initial.missingFootage, resultPath: result.resultPath, coordination: 'Serialized isolated helpers share one saved project copy; use only collaboration tools for writes.' };
   });
 }
 export async function collabStatus(a) {
@@ -71,27 +116,36 @@ export async function collabStatus(a) {
   const lockedNow = !!(await fs.lstat(path.join(dir, lockName)).catch(() => null));
   return { ...data, sessionDir: dir, locked: lockedNow, lock };
 }
+function selectClaim(data, a, agentId) {
+  const matches = data.claims.filter(x => x.compName === a.compName && x.agentId === agentId && (a.compId === undefined || x.compId === a.compId));
+  if (matches.length > 1) throw new Error('Ambiguous composition name; provide compId');
+  if (!matches.length) throw new Error('Composition is not claimed by this agent');
+  return matches[0];
+}
 export async function collabClaim(a) {
   const dir = await sessionPath(a.sessionId), agentId = id(a.agentId, 'agentId');
   const name = a.compName;
   if (typeof name !== 'string' || !name.trim() || name.length > 120 || /[\x00-\x1f]/.test(name)) throw new Error('Invalid compName');
   return locked(dir, 'claim', async () => {
     const data = await metadata(dir); active(data);
-    const existing = data.claims.find(x => x.compName === name);
+    const matches = (data.comps || []).filter(x => x.compName === name && (a.compId === undefined || x.compId === a.compId));
+    if (matches.length > 1) throw new Error('Ambiguous composition name; provide compId');
+    if (!matches.length && (data.source || a.compId !== undefined)) throw new Error('Composition not found in shared project inventory');
+    const saved = matches[0];
+    const existing = data.claims.find(x => saved ? x.compId === saved.compId : x.compName === name && x.compId === null);
     if (existing && existing.agentId !== agentId) throw new Error('Composition is already claimed by ' + existing.agentId);
-    if (!existing) { const saved = (data.comps || []).find(x => x.compName === name); data.claims.push({ agentId, compName: name, compId: saved?.compId ?? null }); }
+    if (!existing) data.claims.push({ agentId, compName: name, compId: saved?.compId ?? null });
     await write(path.join(dir, tag), data);
-    return { sessionId: a.sessionId, agentId, compName: name, projectPath: data.projectPath, claim: existing ? 'already_owned' : 'claimed' };
+    return { sessionId: a.sessionId, agentId, compName: name, compId: saved?.compId ?? null, projectPath: data.projectPath, claim: existing ? 'already_owned' : 'claimed' };
   });
 }
 export async function collabRelease(a) {
   const dir = await sessionPath(a.sessionId), agentId = id(a.agentId, 'agentId');
   return locked(dir, 'release', async () => {
     const data = await metadata(dir); active(data);
-    const claim = data.claims.find(x => x.compName === a.compName);
-    if (!claim || claim.agentId !== agentId) throw new Error('Composition is not claimed by this agent');
+    const claim = selectClaim(data, a, agentId);
     data.claims = data.claims.filter(x => x !== claim); await write(path.join(dir, tag), data);
-    return { sessionId: a.sessionId, agentId, compName: a.compName, released: true };
+    return { sessionId: a.sessionId, agentId, compName: a.compName, compId: claim.compId, released: true };
   });
 }
 export async function collabNote(a) {
@@ -108,12 +162,11 @@ export async function collabRun(a, execute) {
   const dir = await sessionPath(a.sessionId), agentId = id(a.agentId, 'agentId');
   return locked(dir, 'run:' + agentId, async control => {
     const data = await metadata(dir); active(data);
-    const claim = data.claims.find(x => x.compName === a.compName && x.agentId === agentId);
-    if (!claim) throw new Error('Agent must first claim this composition');
-    const p = jsxPath(projectPath(dir)), name = JSON.stringify(a.compName), expected = JSON.stringify(claim.compId);
+    const claim = selectClaim(data, a, agentId);
+    const p = jsxPath(projectPath(dir, data)), name = JSON.stringify(a.compName), expected = JSON.stringify(claim.compId);
     const code = `var f=new File(${p});if(!f.exists)throw new Error('Shared project missing');app.open(f);` +
       `if(!app.project.file||app.project.file.fsName.replace(/\\\\/g,'/').toLowerCase()!==${p}.toLowerCase())throw new Error('Wrong shared project');` +
-      `var comp=null,count=0,i,x;for(i=1;i<=app.project.numItems;i++){x=app.project.item(i);if(x instanceof CompItem && x.name===${name}){comp=x;count++;}}` +
+      `var comp=null,count=0,i,x;for(i=1;i<=app.project.numItems;i++){x=app.project.item(i);if(x instanceof CompItem && x.name===${name} && (${expected}===null || x.id===${expected})){comp=x;count++;}}` +
       `if(count>1)throw new Error('Duplicate composition name');if(!comp){if(${expected}!==null)throw new Error('Claimed composition missing');comp=app.project.items.addComp(${name},${a.width || 512},${a.height || 512},1,${a.duration || 5},${a.frameRate || 30});}` +
       `if(${expected}!==null && comp.id!==${expected})throw new Error('Composition identity changed');var originalId=comp.id;` +
       `var value=(function(comp){\n${a.code}\n})(comp);` +
@@ -126,7 +179,7 @@ export async function collabRun(a, execute) {
     catch (e) { throw new Error('Collaboration session remains locked; sessionId=' + a.sessionId + '; ' + e.message); }
     if (!result.success || result.data?.verified !== true) throw new Error('Collaboration operation failed or unverified; session remains locked. result=' + result.resultPath);
     claim.compId = result.data.compId; data.comps ||= [];
-    const registered = data.comps.find(x => x.compName === claim.compName);
+    const registered = data.comps.find(x => x.compId === claim.compId);
     if (registered) registered.compId = claim.compId; else data.comps.push({ compName: claim.compName, compId: claim.compId });
     data.lastCommit = { agentId, compName: claim.compName, compId: claim.compId, resultPath: result.resultPath, committedAt: new Date().toISOString() };
     await write(path.join(dir, tag), data);

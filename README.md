@@ -8,7 +8,7 @@
   <a href="LICENSE"><img alt="MIT license" src="assets/badge-license.svg"></a>
   <img alt="Node.js 22+" src="assets/badge-node.svg">
   <img alt="19 MCP tools" src="assets/badge-tools.svg">
-  <img alt="Version 1.3" src="assets/badge-version.svg">
+  <img alt="Version 1.4" src="assets/badge-version.svg">
 </p>
 
 [English](README.md) · [中文说明](README.zh-CN.md)
@@ -110,9 +110,9 @@ Check `git status` in the clone and preserve any local changes, then run `git pu
 
 ## Multi-agent testing
 
-Create a disposable shared AEP with `ae_collab_create`. Share its `sessionId`, have each agent claim a distinct comp with `ae_collab_claim`, and perform verified writes via `ae_collab_run`. Agents can exchange notes through `ae_collab_note` and inspect claims and lock status with `ae_collab_status`. Release claims and close the session before managed cleanup.
+Create a disposable shared AEP with `ae_collab_create`. To test an existing saved AEP/AEPX, provide its absolute `sourceProjectPath`; the server verifies and opens a temporary copy, then returns composition IDs and missing-footage information. Share its `sessionId`, have each agent claim a distinct comp with `ae_collab_claim`, and perform verified writes via `ae_collab_run`. Agents can exchange notes through `ae_collab_note` and inspect claims and lock status with `ae_collab_status`. Release claims and close the session before managed cleanup.
 
-Writes are serialized across MCP processes, not simultaneous editing. Claims are cooperative: arbitrary JSX, other AE processes and older MCP servers can bypass them. All writers must use the collaboration API. Failure or timeout leaves the lock in place; `ae_collab_resolve` requires manual confirmation that every helper has stopped and the saved project has been inspected. Never retry an unknown mutation automatically. Only a new disposable test project is created; opening a user's existing project is not supported by this workflow. [Full workflow and limitations](references/mcp-control.md#multiple-agents-sharing-a-test-aep).
+Writes are serialized across MCP processes, not simultaneous editing. Claims are cooperative: arbitrary JSX, other AE processes and older MCP servers can bypass them. All writers must use the collaboration API. Failure or timeout leaves the lock in place; `ae_collab_resolve` requires manual confirmation that every helper has stopped and the saved project has been inspected. Never retry an unknown mutation automatically. Only the saved on-disk project is copied; unsaved changes are excluded. Duplicate composition names can be selected by `compId`. Linked media, fonts and plugins are not copied or sandboxed, and arbitrary JSX can still write outside the copy. Review missing footage and preserve desired results explicitly; no automatic write-back is performed. [Full workflow and limitations](references/mcp-control.md#multiple-agents-sharing-a-test-aep).
 
 ## Run an isolated AE probe
 
@@ -146,7 +146,7 @@ Read [the transport and tool reference](references/mcp-control.md) for schemas, 
 ## Verification and limits
 
 - Windows AE 25.6.4 also passed a managed temporary-project save and host postcondition check; the test session was deleted.
-- 21 Node regression tests cover JSON serialization, host checks, isolated helper ownership, MCP protocol, CDP callbacks/errors/timeouts and asynchronous render failure reporting.
+- 22 Node regression tests cover JSON serialization, host checks, isolated helper ownership, MCP protocol, CDP callbacks/errors/timeouts and asynchronous render failure reporting.
 - The PowerShell collector has 10 regression scenarios for manifest/resources, path containment, debug ports and installed-file parity.
 - A Windows AE 25.5x4 test through the official MCP SDK verified compositions, layers, keyframes, expressions, markers, reopening a saved test project and the native `ADBE Fill` effect.
 - An actual aerender job produced 25 frames of 64×64 RGBA TIFF. All 409,600 decoded samples matched the analytical premultiplied color/opacity expectation at the adjacent 8-bit quantization levels.

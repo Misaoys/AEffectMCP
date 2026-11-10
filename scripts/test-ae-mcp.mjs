@@ -92,6 +92,45 @@ test('collaboration coordinates claims, handoff, notes and managed cleanup', asy
     await fs.rm(session.sessionDir,{recursive:true,force:true});
   }
 });
+test('existing project is copied and duplicate comp names use stable IDs', async () => {
+  const dir = await fs.mkdtemp(path.join(work,'source-copy-'));
+  const source = path.join(dir,'original.aepx');
+  const contents = 'original fixture data'; await fs.writeFile(source, contents);
+  const fakeCreate = async () => {
+    const session = await callTool('ae_test_session_create', {});
+    await fs.writeFile(path.join(session.sessionDir,'.ae-mcp-collab.json'),JSON.stringify({schemaVersion:1,sessionId:session.sessionId,state:'initializing',claims:[],notes:[]}));
+    return session;
+  };
+  let session;
+  try {
+    await assert.rejects(collabCreate({sourceProjectPath:'relative.aep'},fakeCreate,async()=>{}),/absolute/);
+    session = await collabCreate({sourceProjectPath:source},fakeCreate,async(args)=>{
+      assert.match(args.code,/app\.open\(f\)/);
+      assert.doesNotThrow(() => new vm.Script(hostWrapper({runId:'syntax', code:args.code, verifyCode:args.verifyCode, isolated:true})));
+      return {success:true,resultPath:'fixture',data:{comps:[{compName:'Duplicate',compId:10},{compName:'Duplicate',compId:20}],missingFootageCount:1,missingFootage:['offline.mov']}};
+    });
+    assert.notEqual(session.projectPath,source); assert.match(session.projectPath,/test-project\.aepx$/);
+    assert.equal(await fs.readFile(session.projectPath,'utf8'),contents);
+    assert.equal(session.source.sha256,createHash('sha256').update(contents).digest('hex'));
+    assert.equal(session.missingFootageCount,1);
+    await assert.rejects(callTool('ae_collab_claim',{sessionId:session.sessionId,agentId:'a',compName:'Duplicate'}),/provide compId/);
+    await assert.rejects(callTool('ae_collab_claim',{sessionId:session.sessionId,agentId:'a',compName:'Wrong'}),/not found/);
+    for (const [agentId,compId] of [['a',10],['b',20]]) await callTool('ae_collab_claim',{sessionId:session.sessionId,agentId,compName:'Duplicate',compId});
+    const run = await collabRun({sessionId:session.sessionId,agentId:'a',compName:'Duplicate',compId:10,code:'return 1;',verifyCode:'return true;'},async(args)=>{
+      assert.ok(args.code.includes('test-project.aepx')); assert.ok(!args.code.includes('original.aepx'));
+      await fs.writeFile(session.projectPath,'modified copy');
+      return {success:true,resultPath:'fixture',data:{verified:true,compId:10}};
+    });
+    assert.equal(run.committed,true); assert.equal(await fs.readFile(source,'utf8'),contents);
+    const status=await callTool('ae_collab_status',{sessionId:session.sessionId});
+    assert.equal(status.comps.length,2); assert.deepEqual(status.comps.map(x=>x.compId),[10,20]);
+    for (const [agentId,compId] of [['a',10],['b',20]]) await callTool('ae_collab_release',{sessionId:session.sessionId,agentId,compName:'Duplicate',compId});
+    await callTool('ae_collab_close',{sessionId:session.sessionId});
+  } finally {
+    if(session) { assert.equal(path.dirname(session.sessionDir),path.join((await import('node:os')).tmpdir(),'AEffectMCP-managed-tests')); await fs.rm(session.sessionDir,{recursive:true,force:true}); }
+    await fs.rm(dir,{recursive:true,force:true});
+  }
+});
 test('separate MCP processes cannot claim the same composition', async () => {
   const fakeCreate = async () => {
     const session = await callTool('ae_test_session_create', {});
