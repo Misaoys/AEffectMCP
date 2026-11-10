@@ -28,16 +28,21 @@ An existing server with a different API should be used according to its own sche
 
 | Tool | Inputs and behavior |
 | --- | --- |
-| `ae_discover` | Optional absolute `roots` array. Searches root/direct AE install children; inventories running Windows hosts and common CEP roots, including installed `.debug` text. Does not recursively search the whole disk or scan ports. |
+| `ae_discover` | Optional absolute `roots` array. Searches root/direct AE install children and macOS AE application bundles for aerender; inventories running Windows hosts and common CEP roots, including installed `.debug` text. Does not recursively search the whole disk or scan ports. macOS bundle discovery still needs verification on a real Mac. |
 | `ae_cep_targets` | Explicit `port` from 1024 to 65534. Reads `http://127.0.0.1:<port>/json/list`; does not open a panel. |
 | `ae_inspect_host` | Transport fields below; optional `maxItems` 1–500 and `includeEffects`. Read-only project inventory; no fixture creation. |
-| `ae_execute_jsx` | Transport fields and exactly one of `code` or absolute `scriptPath`; optional `undoGroup`. `code` is a function body with a `return` value; files are evaluated with `$.evalFile`. Return plain JSON-compatible values without cycles or native AE object handles. |
+| `ae_execute_jsx` | Transport fields and exactly one of `code` or absolute `scriptPath`; optional `undoGroup` and `verifyCode`. The latter is an ES3 function body that checks actual host state and must return exactly `true`; otherwise the invocation fails. Without it, `verificationStatus` is `not_requested` and feature behavior remains unverified. `code` is a function body with a `return` value; files are evaluated with `$.evalFile`. Return plain JSON-compatible values without cycles or native AE object handles. |
+| `ae_test_session_create` | Creates a marked disposable session in the OS temp directory; returns `sessionDir` and `projectPath`. Create new test projects at `projectPath`, pass `sessionDir` as `workDir`, and preserve wanted deliverables elsewhere. |
+| `ae_test_cleanup` | Windows PowerShell previews managed sessions by default; set `delete: true` for one-click cleanup, or additionally specify `sessionId`. Skips reparse points and pending/unknown runs. It does not close projects, clean legacy paths, or protect a session concurrently used by another client; only clean after use has stopped. |
+| `ae_jsx_status` | Inspect a prior CLI `host-result.json` after a timeout; CDP timeouts have no late result file. Missing, partial, or nonterminal results are unknown, not cancelled; do not automatically retry. |
 | `ae_evaluate_panel` | `port`, exact `targetId`, `expression`, optional `timeoutMs`. `Runtime.evaluate` with return-by-value and awaitPromise. Arbitrary expressions can mutate the panel/host: inspect first and stay within the user's requested action. |
 | `ae_collect_diagnostics` | Optional `repoPath`, `extensionRoot`, `extensionId`, ISO `since`, and `workDir`. Runs the bundled Windows PowerShell collector and retains output/process evidence. |
-| `ae_render_start` | Absolute saved `projectPath`, explicit `comp`, `outputName` filename/sequence pattern, absolute `aerenderPath` or env, `workDir`. Optional `outputModule`, `renderSettings`, paired `startFrame`/`endFrame`, `mfr` ON/OFF, `maxCpuPercent`. Returns `jobPath` immediately. Uses no `-reuse`, writes a unique output directory and closes its task project without saving. |
+| `ae_render_start` | Absolute saved `projectPath`, explicit `comp`, `outputName` filename/sequence pattern, absolute `aerenderPath` or env, `workDir`. Internal job and log filenames are reserved and excluded from output inventory. Optional `outputModule`, `renderSettings`, paired `startFrame`/`endFrame`, `mfr` ON/OFF, `maxCpuPercent`. Returns `jobPath` immediately. Uses no `-reuse`, writes a unique output directory and closes its task project without saving. |
 | `ae_render_status` | Absolute `jobPath` from the start call. Reads persisted state, logs, executable/args, exit code and output inventory. Timeout/no worker completion does not imply pixel correctness or justify a broad process kill. |
 
 Transport fields: `transport` is `cli` (default) or `cdp`; `afterfxPath` is required for CLI unless supplied in env; CDP requires an explicit `port` and exact `targetId`. CLI `launchMode` is `existing` (default) or `isolated`. `workDir` is an absolute task directory. `timeoutMs` ranges 100–55000 and defaults to 30000. A timeout stops waiting, not the AE operation.
+
+The stdio server handles ping, tool listing and render-status reads while another tool call waits. Other tool calls are queued. Queueing covers the request lifetime only: a timed-out host operation may still be running, so inspect its state before issuing another host mutation.
 
 ## Programmatic entry paths
 

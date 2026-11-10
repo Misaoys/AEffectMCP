@@ -7,8 +7,8 @@
 <p>
   <a href="LICENSE"><img alt="MIT license" src="assets/badge-license.svg"></a>
   <img alt="Node.js 22+" src="assets/badge-node.svg">
-  <img alt="8 MCP tools" src="assets/badge-tools.svg">
-  <img alt="Version 1.1" src="assets/badge-version.svg">
+  <img alt="11 MCP tools" src="assets/badge-tools.svg">
+  <img alt="Version 1.2" src="assets/badge-version.svg">
 </p>
 
 [English](README.md) · [中文说明](README.zh-CN.md)
@@ -34,6 +34,9 @@ The server has **zero npm dependencies**. Node.js 22 or newer is required. After
 | `ae_collect_diagnostics` | Collect Windows manifest, installation and log evidence |
 | `ae_render_start` | Start a separate aerender job with a unique output directory |
 | `ae_render_status` | Read job status, exit code, logs and output inventory |
+| `ae_test_session_create` | Create a managed temporary session for disposable test projects |
+| `ae_test_cleanup` | Preview or delete eligible managed test sessions on Windows |
+| `ae_jsx_status` | Inspect a previous CLI JSX result after a timeout |
 
 ## Quick start
 
@@ -69,15 +72,40 @@ AE_MCP_AFTERFX = 'C:/Program Files/Adobe/Adobe After Effects 2025/Support Files/
 AE_MCP_AERENDER = 'C:/Program Files/Adobe/Adobe After Effects 2025/Support Files/aerender.exe'
 ```
 
-Reconnect your MCP client and confirm that it lists the eight tools. Installing the skill alone does not register the server.
+Reconnect your MCP client and confirm that it lists the 11 tools. Installing the skill alone does not register the server.
 
 The Windows environment forwarding above was verified with the official MCP SDK. Its default reduced environment did not deliver an AE result on the tested machine; the supplied system-only set restored the full host/render flow. Other clients should preserve the corresponding system variables without forwarding unrelated credentials.
 
 ### Optional Codex skill
 
-Clone this repository into your Codex skills directory under the name `ae-mcp`, or copy the repository's `SKILL.md`, `agents/`, `references/` and `scripts/` into that directory. Then use `$ae-mcp`. Keep the MCP command pointed at the actual installed script location.
+Clone this repository into your Codex skills directory under the name `ae-mcp`, or copy the repository's `SKILL.md`, `agents/`, `assets/`, `references/` and `scripts/` into that directory. Then use `$ae-mcp`. Keep the MCP command pointed at the actual installed script location.
 
 The project is named AEffectMCP. The `ae-mcp` skill/config key, script filename and existing `ae_*` tools remain compatible with previous installations.
+
+### Connect to Trae on Windows
+
+Open Settings → MCP → Add → manual configuration and merge the following entry into your existing configuration. Replace all paths with the actual Node, repository and AE paths on your machine:
+
+```json
+{
+  "mcpServers": {
+    "ae-mcp": {
+      "command": "C:/Program Files/nodejs/node.exe",
+      "args": ["C:/tools/AEffectMCP/scripts/ae-mcp.mjs", "--stdio"],
+      "env": {
+        "AE_MCP_AFTERFX": "C:/Program Files/Adobe/Adobe After Effects 2025/Support Files/AfterFX.com",
+        "AE_MCP_AERENDER": "C:/Program Files/Adobe/Adobe After Effects 2025/Support Files/aerender.exe"
+      }
+    }
+  }
+}
+```
+
+Reload the server or restart Trae and check for 11 tools. The client must inherit the necessary Windows system environment; see the [transport reference](references/mcp-control.md#installation-and-connection) if AE delivery fails.
+
+### Updating
+
+Check `git status` in the clone and preserve any local changes, then run `git pull --ff-only`. If the MCP configuration points at a separately copied installation, update that copy including `assets/` and `scripts/`, or point the client to the clone. Reload the MCP client.
 
 ## Run an isolated AE probe
 
@@ -100,13 +128,18 @@ node scripts/ae-mcp.mjs --call ae_inspect_host --args-file C:/projects/my-projec
 
 For an edit, use `ae_execute_jsx` with exactly one of `code` or an absolute `scriptPath`. `code` is a function body returning JSON-compatible data; `undoGroup` optionally groups reversible edits. Always assert the actual postconditions. Arbitrary JSX and panel expressions can modify projects/files: they are not sandboxed.
 
+For disposable JSX/AEX tests, call `ae_test_session_create`, save the new test project at its returned `projectPath`, and use `sessionDir` as `workDir`. `ae_test_cleanup` previews by default; `{ "delete": true }` deletes eligible managed sessions, optionally scoped with `sessionId`. Windows cleanup skips incomplete/unknown runs and reparse points; it does not close projects or clean older unmanaged paths. Stop using the session and preserve wanted files elsewhere first. Paths are a convention, not a sandbox.
+
+For scripts that change state, supply `verifyCode`, an independent ES3 function body that checks the actual postcondition and returns exactly `true`. Without it, `verificationStatus` is `not_requested`; script delivery alone does not establish feature behavior. Effects require their own render/pixel checks. For a CLI timeout, `ae_jsx_status` can inspect the reported `resultPath`; CDP timeouts do not have a late result file.
+
 Supply an absolute task-owned `workDir` for file-producing calls. An execution timeout stops waiting; it does **not** cancel an AE operation. Inspect the result and project state before retrying a mutation.
 
 Read [the transport and tool reference](references/mcp-control.md) for schemas, render jobs, diagnostics and more examples.
 
 ## Verification and limits
 
-- 13 Node regression tests cover JSON serialization, host checks, isolated helper ownership, MCP protocol, CDP callbacks/errors/timeouts and asynchronous render failure reporting.
+- Windows AE 25.6.4 also passed a managed temporary-project save and host postcondition check; the test session was deleted.
+- 18 Node regression tests cover JSON serialization, host checks, isolated helper ownership, MCP protocol, CDP callbacks/errors/timeouts and asynchronous render failure reporting.
 - The PowerShell collector has 10 regression scenarios for manifest/resources, path containment, debug ports and installed-file parity.
 - A Windows AE 25.5x4 test through the official MCP SDK verified compositions, layers, keyframes, expressions, markers, reopening a saved test project and the native `ADBE Fill` effect.
 - An actual aerender job produced 25 frames of 64×64 RGBA TIFF. All 409,600 decoded samples matched the analytical premultiplied color/opacity expectation at the adjacent 8-bit quantization levels.

@@ -1,6 +1,6 @@
 {
   "name": "aeffect-mcp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "Control, debug and test Adobe After Effects through MCP, JSX, CEP and aerender without computer use.",
   "type": "module",

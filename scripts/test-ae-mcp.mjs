@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { TOOLS, hostWrapper, callTool, cdpEvaluate } from './ae-mcp.mjs';
+import { TOOLS, hostWrapper, callTool, cdpEvaluate, macBundleAerenderCandidates } from './ae-mcp.mjs';
 
 const serverPath = fileURLToPath(new URL('./ae-mcp.mjs', import.meta.url));
 const work = path.resolve(process.env.AE_MCP_TEST_WORK || path.join(process.cwd(), 'work', 'ae-mcp', 'tests'));
@@ -15,11 +15,53 @@ await fs.mkdir(work, { recursive: true });
 function fakeHost(extra = {}) {
   return vm.createContext({ app: { version: '25.fixture', name: 'Adobe After Effects', project: {} }, CompItem: function CompItem() {}, JSON: undefined, ...extra });
 }
+test('macOS discovery considers AE app bundle aerender paths', () => {
+  const entries = [{ name: 'Adobe After Effects 2025.app', isDirectory: () => true }, { name: 'Other.app', isDirectory: () => true }];
+  assert.deepEqual(macBundleAerenderCandidates('/Applications/Adobe After Effects 2025', entries), [path.join('/Applications/Adobe After Effects 2025', 'Adobe After Effects 2025.app', 'Contents/MacOS/aerender')]);
+  assert.equal(macBundleAerenderCandidates('/Applications/Adobe After Effects 2025.app', []).length, 1);
+});
 test('ES3 wrapper preserves Unicode, control characters, quotes and nested JSON without host JSON', () => {
   const code = 'return {text:"中文\\n\\t\\\"\\\\",nested:[1,true,null,{zero:0}],u:"\\u2028",nan:NaN};';
   const actual = JSON.parse(vm.runInContext(hostWrapper({ runId: 'fixture', code }), fakeHost()));
   assert.equal(actual.success, true); assert.equal(actual.stage, 'complete'); assert.equal(actual.aeVersion, '25.fixture');
   assert.deepEqual(actual.data, { text: '中文\n\t"\\', nested: [1, true, null, { zero: 0 }], u: '\u2028', nan: null });
+});
+test('host execution is distinct from postcondition verification', () => {
+  const unverified = JSON.parse(vm.runInContext(hostWrapper({ runId: 'none', code: 'return 1;' }), fakeHost()));
+  assert.equal(unverified.success, true); assert.equal(unverified.verificationStatus, 'not_requested');
+  const passed = JSON.parse(vm.runInContext(hostWrapper({ runId: 'pass', code: 'app.project.value=42;', verifyCode: 'return app.project.value === 42;' }), fakeHost()));
+  assert.equal(passed.success, true); assert.equal(passed.verificationStatus, 'passed');
+  const failed = JSON.parse(vm.runInContext(hostWrapper({ runId: 'fail', code: 'app.project.value=1;', verifyCode: 'return app.project.value === 42;' }), fakeHost()));
+  assert.equal(failed.success, false); assert.match(failed.errors[0].message, /Postcondition/);
+});
+test('managed session preview and cleanup skip pending work', async () => {
+  if (process.platform !== 'win32') return;
+  const session = await callTool('ae_test_session_create', {});
+  const run = path.join(session.sessionDir, 'ae-mcp-pending');
+  await fs.mkdir(run); await fs.writeFile(path.join(run, 'request.json'), JSON.stringify({ runId: 'ae-mcp-pending' }));
+  const preview = await callTool('ae_test_cleanup', {});
+  assert.equal(preview.sessions.find(x => x.sessionId === session.sessionId).action, 'skipped');
+  await fs.writeFile(path.join(run, 'host-result.json'), JSON.stringify({ runId: 'ae-mcp-pending', stage: 'complete' }));
+  const eligible = await callTool('ae_test_cleanup', {});
+  assert.equal(eligible.sessions.find(x => x.sessionId === session.sessionId).action, 'eligible');
+  const deletion = await callTool('ae_test_cleanup', { delete: true, sessionId: session.sessionId });
+  assert.equal(deletion.sessions[0].action, 'deleted');
+  await assert.rejects(fs.access(session.sessionDir));
+});
+test('JSX status distinguishes missing, partial, stale and completed host results', async () => {
+  const dir = await fs.mkdtemp(path.join(work, 'status-'));
+  const resultPath = path.join(dir, 'host-result.json');
+  await fs.writeFile(path.join(dir, 'request.json'), JSON.stringify({runId:'r1'}));
+  assert.equal((await callTool('ae_jsx_status', {resultPath})).state, 'unknown');
+  await fs.writeFile(resultPath, '{');
+  assert.equal((await callTool('ae_jsx_status', {resultPath})).state, 'unknown');
+  await fs.writeFile(resultPath, JSON.stringify({runId:'r1',stage:'executing'}));
+  assert.equal((await callTool('ae_jsx_status', {resultPath})).state, 'pending_or_unknown');
+  await fs.writeFile(resultPath, JSON.stringify({runId:'other',stage:'complete'}));
+  await assert.rejects(callTool('ae_jsx_status', {resultPath}), /Stale/);
+  await fs.writeFile(resultPath, JSON.stringify({runId:'r1',stage:'complete',aeVersion:'25',success:true}));
+  assert.equal((await callTool('ae_jsx_status', {resultPath})).state, 'complete');
+  await fs.rm(dir,{recursive:true});
 });
 test('host exception is structured and closes an opened undo group', () => {
   let began = 0, ended = 0;
@@ -74,9 +116,10 @@ test('stdio negotiates protocol, lists tools and returns tool failures as isErro
   const exit = await new Promise(resolve => child.on('close', resolve));
   assert.equal(exit, 0); assert.equal(stderr, '');
   const messages = stdout.trim().split('\n').map(x => JSON.parse(x));
-  assert.equal(messages.length, 5); assert.equal(messages[0].error.code, -32002);
-  assert.equal(messages[1].result.protocolVersion, '2025-06-18'); assert.equal(messages[2].result.tools.length, 8);
-  assert.equal(messages[3].result.isError, true); assert.deepEqual(messages[4].result, {});
+  const byId = new Map(messages.map(m => [m.id, m]));
+  assert.equal(messages.length, 5); assert.equal(byId.get(0).error.code, -32002);
+  assert.equal(byId.get(1).result.protocolVersion, '2025-06-18'); assert.equal(byId.get(2).result.tools.length, 11);
+  assert.equal(byId.get(3).result.isError, true); assert.deepEqual(byId.get(4).result, {});
 });
 
 // Minimal local CDP fixture; it cannot prove Adobe execution.
@@ -132,6 +175,27 @@ test('CDP targets exact panel and checks protocol errors, exceptions and timeout
     finally { await ff.close(); }
   }
 });
+test('stdio responds to ping while a panel call is waiting', async () => {
+  const f = await fixture(() => null);
+  const child = spawn(process.execPath, [serverPath, '--stdio'], { windowsHide: true });
+  let stdout = '';
+  child.stdout.on('data', d => { stdout += d; });
+  const send = msg => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...msg }) + '\n');
+  try {
+    send({ id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } });
+    send({ id: 2, method: 'tools/call', params: { name: 'ae_evaluate_panel', arguments: { port: f.port, targetId: 'cep-fixture', expression: '1', timeoutMs: 700 } } });
+    await new Promise(r => setTimeout(r, 200));
+    send({ id: 3, method: 'ping' });
+    await new Promise(r => setTimeout(r, 200));
+    const replies = stdout.trim().split('\n').filter(Boolean).map(JSON.parse);
+    assert.ok(replies.some(x => x.id === 3));
+    assert.ok(!replies.some(x => x.id === 2));
+  } finally {
+    child.stdin.end();
+    await new Promise(resolve => child.on('close', resolve));
+    await f.close();
+  }
+});
 test('bundled transport adapter verifies CEP callback and run identity with a fake host', async () => {
   const f = await fixture(req => {
     const context = fakeHost();
@@ -153,6 +217,9 @@ test('render rejects traversal and invalid range before launching a worker', asy
   const a = { aerenderPath: fake, projectPath: project, comp: 'fixture', outputName: '../overwrite.png', workDir: work };
   await assert.rejects(callTool('ae_render_start', a), /outputName/);
   await assert.rejects(callTool('ae_render_start', { ...a, outputName: 'frame.png', startFrame: 2, endFrame: 1 }), /exceeds/);
+  for (const outputName of ['render-job.json', 'WORKER.LOG', 'aerender.stdout.log', 'aerender.stderr.log']) {
+    await assert.rejects(callTool('ae_render_start', { ...a, outputName }), /reserved/);
+  }
 });
 test('asynchronous render worker persists launch failure with logs and no output success', async () => {
   const fake = path.join(work, 'aerender.exe'), project = path.join(work, 'fixture.aep');

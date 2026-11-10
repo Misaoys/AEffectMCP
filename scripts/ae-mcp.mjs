@@ -7,6 +7,10 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
+const ICONS = [{
+  src: 'data:image/png;base64,' + (await fs.readFile(new URL('../assets/icon.png', import.meta.url))).toString('base64'),
+  mimeType: 'image/png', sizes: ['256x256']
+}];
 const SUPPORTED = ['2025-11-25', '2025-06-18', '2024-11-05'];
 const str = { type: 'string', minLength: 1 };
 const integer = { type: 'integer' };
@@ -25,13 +29,16 @@ export const TOOLS = [
   tool('ae_discover', 'Find AE executables, running Windows hosts and installed CEP roots. No host is started.', { roots: { type: 'array', items: str } }, [], true),
   tool('ae_cep_targets', 'List targets on an explicit loopback CEP debug port. Select the installed extension target before evaluating.', { port: transport.port }, ['port'], true),
   tool('ae_inspect_host', 'Read real AE version, project, active comp/layers, render queue and optional effect registry; writes a fresh probe result.', { ...transport, includeEffects: { type: 'boolean' }, maxItems: { type: 'integer', minimum: 1, maximum: 500 } }, [], true),
-  tool('ae_execute_jsx', 'Execute authorized JSX in AE via AfterFX -r or a real CEP evalScript bridge. Supply exactly one of code or scriptPath. Code is a function body returning JSON-compatible data. Timeout does not cancel execution; never blindly retry mutations.', { ...transport, code: str, scriptPath: str, undoGroup: str }, []),
+  tool('ae_execute_jsx', 'Execute authorized JSX in AE via AfterFX -r or a real CEP evalScript bridge. Supply exactly one of code or scriptPath. Code is a function body returning JSON-compatible data. Timeout does not cancel execution; never blindly retry mutations.', { ...transport, code: str, scriptPath: str, undoGroup: str, verifyCode: str }, []),
   tool('ae_evaluate_panel', 'Evaluate authorized panel JavaScript through CEP CDP without computer use. Can inspect DOM, call panel APIs or drive DOM events. Does not prove AE behavior without a host result.', { port: transport.port, targetId: str, expression: str, timeoutMs: transport.timeoutMs }, ['port', 'targetId', 'expression']),
   tool('ae_collect_diagnostics', 'Run the bundled read-only Windows CEP/manifest/install/log collector and retain its JSON evidence.', { repoPath: str, extensionRoot: str, extensionId: str, workDir: str, since: str }, [] , true),
   tool('ae_render_start', 'Start aerender on an explicit saved project and comp in a separate owned process. Output goes into a unique run directory. Returns immediately; poll ae_render_status. Does not reuse the user host.', {
     aerenderPath: str, projectPath: str, comp: str, workDir: str, outputName: str, outputModule: str, renderSettings: str,
     startFrame: integer, endFrame: integer, mfr: { type: 'string', enum: ['ON', 'OFF'] }, maxCpuPercent: { type: 'integer', minimum: 1, maximum: 100 }
   }, ['projectPath', 'comp', 'outputName']),
+  tool('ae_test_session_create', 'Create a managed temporary test session for JSX/AEX fixtures; save the isolated test project at projectPath and use sessionDir as workDir. Never use this for user projects.', {}, []),
+  tool('ae_test_cleanup', 'Delete managed temporary test sessions using PowerShell on Windows. Defaults to preview. Set delete=true to delete eligible sessions; sessions with pending or unknown execution are skipped.', { delete: { type: 'boolean' }, sessionId: str }, []),
+  tool('ae_jsx_status', 'Inspect a previous JSX result after timeout; timeout never means the operation was cancelled. Supply resultPath from the timeout. This does not execute or retry JSX.', { resultPath: str }, ['resultPath'], true),
   tool('ae_render_status', 'Read a render job result and output inventory. Exit zero and nonempty outputs prove delivery only; compare pixels/frames for behavior assertions.', { jobPath: str }, ['jobPath'], true)
 ];
 function validate(name, args) {
@@ -82,6 +89,12 @@ function capture(command, args, timeoutMs = 15000) {
     child.on('error', e => finish(e)); child.on('close', code => finish(null, code));
   });
 }
+export function macBundleAerenderCandidates(root, entries) {
+  const paths = entries.filter(entry => entry.isDirectory() && /^Adobe After Effects.*\.app$/i.test(entry.name))
+    .map(entry => path.join(root, entry.name, 'Contents/MacOS/aerender'));
+  if (/\.app$/i.test(root)) paths.push(path.join(root, 'Contents/MacOS/aerender'));
+  return paths;
+}
 async function discover(a) {
   const roots = a.roots || (process.platform === 'win32' ? ['C:/Program Files/Adobe', 'D:/Program Files/Adobe', 'E:/Program Files/Adobe'] : ['/Applications']);
   const installations = [];
@@ -89,8 +102,12 @@ async function discover(a) {
     absolute(root, 'root');
     const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
     const candidates = [root, ...entries.filter(x => x.isDirectory() && /after effects/i.test(x.name)).map(x => path.join(root, x.name))];
-    for (const c of candidates) for (const rel of ['Support Files/AfterFX.exe', 'Support Files/AfterFX.com', 'AfterFX.exe', 'AfterFX.com', 'aerender', 'Support Files/aerender.exe']) {
-      const p = path.join(c, rel); if ((await fs.stat(p).catch(() => null))?.isFile()) installations.push(p);
+    for (const c of candidates) {
+      const paths = ['Support Files/AfterFX.exe', 'Support Files/AfterFX.com', 'AfterFX.exe', 'AfterFX.com', 'aerender', 'Support Files/aerender.exe'].map(rel => path.join(c, rel));
+      if (process.platform === 'darwin') {
+        paths.push(...macBundleAerenderCandidates(c, await fs.readdir(c, { withFileTypes: true }).catch(() => [])));
+      }
+      for (const p of paths) if ((await fs.stat(p).catch(() => null))?.isFile()) installations.push(p);
     }
   }
   let processes = null, processError = null;
@@ -159,7 +176,7 @@ function encode(v) {
   for (k in v) if (v.hasOwnProperty(k)) parts.push(quote(k) + ':' + encode(v[k]));
   return '{' + parts.join(',') + '}';
 }`;
-export function hostWrapper({ runId, code, resultPath, undoGroup, isolated = false }) {
+export function hostWrapper({ runId, code, resultPath, undoGroup, isolated = false, verifyCode }) {
   return `(function(){\n${SERIALIZER}\n` +
     `var result={schemaVersion:1,runId:${JSON.stringify(runId)},success:false,stage:'starting',startedAt:(new Date()).getTime(),aeVersion:null,aeName:null,data:null,errors:[]};\n` +
     `var output=${JSON.stringify(resultPath || null)}, undo=false;\n` +
@@ -167,7 +184,9 @@ export function hostWrapper({ runId, code, resultPath, undoGroup, isolated = fal
     `try{if(typeof app==='undefined'||!app.project||typeof CompItem==='undefined')throw new Error('Target is not After Effects');result.aeVersion=app.version;result.aeName=app.name||'Adobe After Effects';persist();` +
     (isolated ? `if(app.project.file||app.project.numItems!==0)throw new Error('Isolated helper must start with an empty project');app.exitAfterLaunchAndEval=true;` : '') +
     (undoGroup ? `app.beginUndoGroup(${JSON.stringify(undoGroup)});undo=true;` : '') +
-    `result.stage='executing';persist();result.data=(function(){\n${code}\n})();result.success=true;result.stage='complete';}\n` +
+    `result.stage='executing';persist();result.data=(function(){\n${code}\n})();` +
+    (verifyCode ? `result.stage='verifying';persist();result.verification=(function(){\n${verifyCode}\n})();if(result.verification!==true)throw new Error('Postcondition verification must return true');result.verificationStatus='passed';` : `result.verificationStatus='not_requested';`) +
+    `result.success=true;result.stage='complete';}\n` +
     `catch(e){result.success=false;result.stage='failed';result.errors.push({message:String(e),line:e.line||null,file:e.fileName||null});}\n` +
     `finally{if(undo){try{app.endUndoGroup();}catch(e2){result.success=false;result.stage='failed';result.errors.push({message:String(e2)});}}result.finishedAt=(new Date()).getTime();try{persist();}catch(e3){result.success=false;result.stage='failed';result.errors.push({message:String(e3)});}}\nreturn encode(result);\n})()`;
 }
@@ -192,7 +211,7 @@ async function executeJsx(a) {
   let code = a.code;
   if (a.scriptPath) { const p = absolute(a.scriptPath, 'scriptPath'); await fs.access(p); code = 'return $.evalFile(new File(' + JSON.stringify(p.replace(/\\/g, '/')) + '));'; }
   const dir = await runDirectory(a), runId = path.basename(dir), resultPath = path.join(dir, 'host-result.json'), scriptPath = path.join(dir, 'probe.jsx');
-  const wrapper = hostWrapper({ runId, code, resultPath: mode === 'cli' ? resultPath.replace(/\\/g, '/') : null, undoGroup: a.undoGroup, isolated });
+  const wrapper = hostWrapper({ runId, code, resultPath: mode === 'cli' ? resultPath.replace(/\\/g, '/') : null, undoGroup: a.undoGroup, isolated, verifyCode: a.verifyCode });
   const launchArgs = mode === 'cli' ? [...(isolated ? ['-m', '-noui'] : []), '-r', scriptPath] : null;
   await fs.writeFile(scriptPath, wrapper, 'utf8');
   const startedAt = Date.now();
@@ -224,7 +243,39 @@ async function executeJsx(a) {
     if (!payload) throw new Error('AE delivery timeout; execution may still be active. Do not retry mutations. Check AE readiness and file-write preference. result=' + resultPath);
   }
   if (payload.runId !== runId || !payload.aeVersion || !['complete', 'failed'].includes(payload.stage) || typeof payload.success !== 'boolean') throw new Error('Invalid/stale AE result: ' + resultPath);
-  return { ...payload, resultPath, scriptPath, evidenceLevel: 'live-host', verifiedScope: 'This host invocation only; inspect returned assertions for feature correctness.' };
+  return { ...payload, resultPath, scriptPath, evidenceLevel: 'live-host', verifiedScope: payload.success && payload.verificationStatus === 'passed' ? 'Host invocation and supplied postcondition passed; validate its coverage and rendered pixels separately.' : 'Feature correctness is not established; inspect the host result and verification status.' };
+}
+const TEST_ROOT = path.join(os.tmpdir(), 'AEffectMCP-managed-tests');
+async function createTestSession() {
+  await fs.mkdir(TEST_ROOT, { recursive: true });
+  const rootInfo = await fs.lstat(TEST_ROOT);
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error('Managed test root must be a real directory');
+  const sessionDir = await fs.mkdtemp(path.join(TEST_ROOT, 'session-'));
+  const sessionId = path.basename(sessionDir);
+  await jsonWrite(path.join(sessionDir, '.ae-mcp-session.json'), { schemaVersion: 1, sessionId, createdAt: new Date().toISOString() });
+  return { sessionId, sessionDir, projectPath: path.join(sessionDir, 'test-project.aep'), cleanupTool: 'ae_test_cleanup', note: 'Use only for disposable test assets. Preserve requested deliverables elsewhere before cleanup.' };
+}
+async function cleanupTestSessions(a) {
+  if (process.platform !== 'win32') throw new Error('Managed test cleanup currently requires Windows PowerShell');
+  const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(HERE, 'cleanup-ae-mcp-tests.ps1')];
+  if (a.delete) args.push('-Delete');
+  if (a.sessionId) { if (!/^session-[A-Za-z0-9]+$/.test(a.sessionId)) throw new Error('Invalid sessionId'); args.push('-SessionId', a.sessionId); }
+  const r = await capture('powershell.exe', args, 45000);
+  if (r.exitCode !== 0) throw new Error('Cleanup failed: ' + (r.stderr || r.stdout));
+  return JSON.parse(r.stdout.replace(/^\uFEFF/, '').trim());
+}
+async function jsxStatus(a) {
+  const resultPath = absolute(a.resultPath, 'resultPath');
+  if (path.basename(resultPath) !== 'host-result.json') throw new Error('resultPath must name host-result.json');
+  const dir = path.dirname(resultPath);
+  const request = JSON.parse(await fs.readFile(path.join(dir, 'request.json'), 'utf8'));
+  let result;
+  try { result = JSON.parse((await fs.readFile(resultPath, 'utf8')).replace(/^\uFEFF/, '')); }
+  catch (e) { if (e.code === 'ENOENT' || e instanceof SyntaxError) return { state: 'unknown', resultPath, message: 'No complete result; operation may still execute. Do not retry mutations.' }; throw e; }
+  if (result.runId !== request.runId) throw new Error('Stale result runId');
+  if (!['complete', 'failed'].includes(result.stage)) return { state: 'pending_or_unknown', resultPath, stage: result.stage, message: 'Do not retry mutations.' };
+  if (!result.aeVersion || typeof result.success !== 'boolean') throw new Error('Invalid host result');
+  return { ...result, resultPath, state: result.success ? 'complete' : 'failed', evidenceLevel: 'live-host' };
 }
 async function diagnostics(a) {
   if (process.platform !== 'win32') throw new Error('Bundled diagnostic collector requires Windows');
@@ -241,6 +292,7 @@ async function renderStart(a) {
   const project = absolute(a.projectPath, 'projectPath'); await fs.access(project);
   if (!/\.aepx?$/i.test(project)) throw new Error('projectPath must be a saved .aep or .aepx');
   if (path.basename(a.outputName) !== a.outputName || /[/\\:]/.test(a.outputName) || ['.', '..'].includes(a.outputName)) throw new Error('outputName must be a filename or sequence pattern, without directories');
+  if (['render-job.json', 'worker.log', 'aerender.stdout.log', 'aerender.stderr.log'].includes(a.outputName.toLowerCase())) throw new Error('outputName is reserved for render job metadata');
   if ((a.startFrame === undefined) !== (a.endFrame === undefined)) throw new Error('Specify both startFrame and endFrame');
   if (a.startFrame > a.endFrame) throw new Error('startFrame exceeds endFrame');
   const dir = await runDirectory(a), jobPath = path.join(dir, 'render-job.json');
@@ -272,7 +324,8 @@ async function renderWorker(jobPath) {
   const names = await fs.readdir(job.outputDir);
   const outputs = [];
   const pattern = new RegExp('^' + job.outputName.split(/(\[#+\])/).map(part => /^\[#+\]$/.test(part) ? '\\d{' + (part.length - 2) + ',}' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('') + '$', 'i');
-  for (const name of names.filter(x => pattern.test(x))) {
+  const reserved = new Set(['render-job.json', 'worker.log', 'aerender.stdout.log', 'aerender.stderr.log']);
+  for (const name of names.filter(x => !reserved.has(x.toLowerCase()) && pattern.test(x))) {
     const p = path.join(job.outputDir, name), stat = await fs.stat(p); if (stat.isFile()) outputs.push({ path: p, bytes: stat.size });
   }
   Object.assign(job, status, { outputs, finishedAt: new Date().toISOString(), state: status.exitCode === 0 && outputs.length && outputs.every(x => x.bytes > 0) ? 'complete' : 'failed', evidenceLevel: 'render-delivery', pixelCorrectnessVerified: false });
@@ -288,6 +341,9 @@ export async function callTool(name, args = {}) {
     case 'ae_evaluate_panel': return cdpEvaluate(args);
     case 'ae_collect_diagnostics': return diagnostics(args);
     case 'ae_render_start': return renderStart(args);
+    case 'ae_test_session_create': return createTestSession();
+    case 'ae_test_cleanup': return cleanupTestSessions(args);
+    case 'ae_jsx_status': return jsxStatus(args);
     case 'ae_render_status': return JSON.parse(await fs.readFile(absolute(args.jobPath, 'jobPath'), 'utf8'));
   }
 }
@@ -295,28 +351,38 @@ async function stdioServer() {
   let initialized = false;
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   const reply = x => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...x }) + '\n');
-  for await (const line of input) {
-    let request;
-    try { request = JSON.parse(line); } catch { reply({ id: null, error: { code: -32700, message: 'Parse error' } }); continue; }
-    if (request.jsonrpc !== '2.0' || typeof request.method !== 'string' || Array.isArray(request)) { reply({ id: request.id ?? null, error: { code: -32600, message: 'Invalid request' } }); continue; }
-    if (!('id' in request)) continue;
+  let toolQueue = Promise.resolve();
+  const pending = new Set();
+  async function handle(request) {
     try {
       let result;
       if (request.method === 'initialize') {
         initialized = true;
         const requested = request.params?.protocolVersion;
-        result = { protocolVersion: SUPPORTED.includes(requested) ? requested : SUPPORTED[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'AEffectMCP', version: '1.1.0' },
-          instructions: 'Control Adobe After Effects through JSX, CEP CDP and aerender without computer use. Discover exact executables and CEP target first. Preserve user projects and sessions. Timeout does not cancel a mutation; never blindly retry it. Use work/<task>/ for evidence. Report source, installed, loader, live-host and pixel/render proof separately. Execute destructive actions only within user authorization.' };
+        result = { protocolVersion: SUPPORTED.includes(requested) ? requested : SUPPORTED[0], capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'AEffectMCP', version: '1.2.0', icons: ICONS },
+          instructions: 'Control Adobe After Effects through JSX, CEP CDP and aerender without computer use. Discover exact executables and CEP target first. Preserve user projects and sessions. Timeout does not cancel a mutation; never blindly retry it. For isolated JSX/AEX tests create a managed temporary test session, save its project at projectPath and use sessionDir as workDir. Cleanup only through ae_test_cleanup; preserve requested deliverables. Use verifyCode for postcondition assertions. Host execution alone does not prove effects. Timeout is unknown, never blindly retry. Report source, installed, loader, live-host and pixel/render proof separately. Execute destructive actions only within user authorization.' };
       } else if (request.method === 'ping') result = {};
-      else if (!initialized) { reply({ id: request.id, error: { code: -32002, message: 'Initialize first' } }); continue; }
+      else if (!initialized) { reply({ id: request.id, error: { code: -32002, message: 'Initialize first' } }); return; }
       else if (request.method === 'tools/list') result = { tools: TOOLS };
       else if (request.method === 'tools/call') {
         try { const data = await callTool(request.params?.name, request.params?.arguments || {}); result = { content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data, isError: data.success === false || data.state === 'failed' }; }
         catch (e) { result = { content: [{ type: 'text', text: JSON.stringify({ success: false, error: e.message }) }], isError: true }; }
-      } else { reply({ id: request.id, error: { code: -32601, message: 'Method not found' } }); continue; }
+      } else { reply({ id: request.id, error: { code: -32601, message: 'Method not found' } }); return; }
       reply({ id: request.id, result });
     } catch (e) { reply({ id: request.id, error: { code: -32603, message: e.message } }); }
   }
+  for await (const line of input) {
+    let request;
+    try { request = JSON.parse(line); } catch { reply({ id: null, error: { code: -32700, message: 'Parse error' } }); continue; }
+    if (!request || request.jsonrpc !== '2.0' || typeof request.method !== 'string' || Array.isArray(request)) { reply({ id: request?.id ?? null, error: { code: -32600, message: 'Invalid request' } }); continue; }
+    if (!('id' in request)) continue;
+    const queued = initialized && request.method === 'tools/call' && request.params?.name !== 'ae_render_status';
+    const task = queued ? toolQueue.then(() => handle(request)) : handle(request);
+    if (queued) toolQueue = task.catch(() => {});
+    pending.add(task);
+    task.finally(() => pending.delete(task));
+  }
+  await Promise.allSettled([...pending]);
 }
 async function main() {
   if (process.argv[2] === '--render-worker') return renderWorker(process.argv[3]);
